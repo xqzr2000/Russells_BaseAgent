@@ -1,0 +1,43 @@
+{
+  "name": "Russell's BaseAgent",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" }
+  },
+  "containerEnv": {
+    "UV_LINK_MODE": "copy",
+    "UV_PYTHON_PREFERENCE": "only-system"
+  },
+  "remoteEnv": {
+    "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}"
+  },
+  // Codespaces passes repository/user secrets in as environment variables.
+  // Add OPENAI_API_KEY at github.com/settings/codespaces (or the repo's
+  // Settings > Secrets > Codespaces) and allow this repository to use it.
+  "secrets": {
+    "OPENAI_API_KEY": { "description": "Your OpenAI API key." },
+    "OPENAI_MODEL": { "description": "Optional default model, e.g. gpt-5-mini." }
+  },
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": { "label": "Chat room", "onAutoForward": "openBrowser" },
+    "8000": { "label": "Agent API", "onAutoForward": "silent" }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postAttachCommand": "echo 'Run `make dev`, then open the Chat room port (5173).'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+        "python.terminal.activateEnvironment": true
+      }
+    }
+  }
+}
