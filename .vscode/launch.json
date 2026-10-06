@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug agent server (set breakpoints in agent.py)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["baseagent.server.app:app", "--host", "0.0.0.0", "--port", "8000"],
+      "justMyCode": true
+    },
+    {
+      "name": "Debug tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "tests"],
+      "justMyCode": true
+    }
+  ]
+}
