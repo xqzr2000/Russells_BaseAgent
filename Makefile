@@ -5,7 +5,7 @@ setup:            ## install Python (uv) and UI (npm) dependencies
 	cd web && npm ci
 
 dev:              ## agent server + chat room with hot reload; open port 5173
-	./scripts/dev.sh
+	bash scripts/dev.sh
 
 server:           ## agent server only (port 8000, auto-reload)
 	uv run uvicorn baseagent.server.app:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --reload-dir skills
