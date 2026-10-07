@@ -77,6 +77,10 @@ make dev
 - When prompted, open the Chat room port (5173)
 - You can also open it later from the Ports tab
 
+### See this chat room in action.
+
+https://github.com/user-attachments/assets/7746dc0f-3124-4213-a29c-baa4d36d265c
+
 ## Repo tree
 - Still evolving.
 
