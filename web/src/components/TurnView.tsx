@@ -1,7 +1,23 @@
 import { useState } from "react";
 import type { Attachment } from "../types";
-import type { Step, ToolRun, Turn } from "../turns";
+import { turnFiles, type Step, type ToolRun, type Turn } from "../turns";
+import { FileIcon } from "./FileIcon";
 import { Markdown } from "./Markdown";
+
+/** Download cards for the files a turn produced (e.g. the EDA notebook). */
+function FileList({ files }: { files: Attachment[] }) {
+  return (
+    <div className="file-list" aria-label="Files">
+      {files.map((file) => (
+        <a key={file.url} className="file-card" href={file.url ?? undefined} download={file.title ?? true}>
+          <FileIcon />
+          <span className="file-name">{file.title ?? "file"}</span>
+          <span className="file-action">Download</span>
+        </a>
+      ))}
+    </div>
+  );
+}
 
 function prettyArgs(raw: string): string {
   try {
@@ -55,15 +71,22 @@ function ToolRow({ run }: { run: ToolRun }) {
   const [open, setOpen] = useState(false);
   const running = run.result === undefined;
   const status = running ? "running" : run.isError ? "error" : "ok";
+  // Downloadable files are listed once under the turn's answer instead.
+  const inline = run.attachments.filter((a) => !(a.kind === "file" && a.url));
   return (
     <div className={`tool tool-${status}`}>
       <button className="tool-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <span className="tool-name">{run.name}</span>
         <span className="tool-args">{argsPreview(run.args)}</span>
         <span className="tool-status">
-          {running ? "running" : run.isError ? "failed" : `${run.durationMs ?? 0} ms`}
+          {running ? "running" : run.isError ? "failed" : formatDuration(run.durationMs ?? 0)}
         </span>
       </button>
+      {running && run.progress && (
+        <div className="tool-progress" aria-live="polite">
+          {run.progress}
+        </div>
+      )}
       {open && (
         <div className="tool-body">
           <div className="tool-label">Arguments</div>
@@ -72,15 +95,19 @@ function ToolRow({ run }: { run: ToolRun }) {
           <pre className="code">{running ? "Waiting for the tool..." : run.result}</pre>
         </div>
       )}
-      {run.attachments.length > 0 && (
+      {inline.length > 0 && (
         <div className="attachments">
-          {run.attachments.map((a, i) => (
+          {inline.map((a, i) => (
             <AttachmentView key={i} item={a} />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+function formatDuration(ms: number): string {
+  return ms < 10_000 ? `${ms} ms` : `${(ms / 1000).toFixed(0)} s`;
 }
 
 function TraceStep({ step, live }: { step: Step; live: boolean }) {
@@ -118,11 +145,24 @@ export function TurnView({ turn, live }: { turn: Turn; live: boolean }) {
     : answerStep?.text ?? "";
   const showThinkingNode = live && !turn.ended && (!lastStep || (lastStep.done && lastStep.hasToolCalls));
   const steps = turn.usage ? turn.steps.length : undefined;
+  const files = turnFiles(turn);
 
   return (
     <article className="turn">
       <div className="user-msg">
-        <div className="user-bubble">{turn.userMessage}</div>
+        <div className="user-bubble">
+          {turn.userMessage}
+          {turn.userFiles.length > 0 && (
+            <div className="bubble-files">
+              {turn.userFiles.map((path) => (
+                <span key={path} className="bubble-file">
+                  <FileIcon />
+                  {path.split("/").pop()}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div className="agent-msg">
         {(traced.length > 0 || showThinkingNode) && (
@@ -156,6 +196,7 @@ export function TurnView({ turn, live }: { turn: Turn; live: boolean }) {
             <Markdown text={answer} />
           </div>
         )}
+        {files.length > 0 && <FileList files={files} />}
         {turn.ended && turn.stopReason !== "final" && (
           <div className={`note note-${turn.stopReason === "error" ? "error" : "warning"}`}>
             {STOP_MESSAGES[turn.stopReason ?? ""] ?? turn.finalText}

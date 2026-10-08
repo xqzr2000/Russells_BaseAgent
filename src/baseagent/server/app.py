@@ -1,9 +1,12 @@
 """HTTP API for the chat room.
 
     POST /api/sessions                 start a chat with an agent
-    POST /api/sessions/{id}/messages   send a message; the response is an SSE
-                                       stream of agent events until turn_end
+    POST /api/sessions/{id}/messages   send a message (optionally with attached
+                                       files); the response is an SSE stream of
+                                       agent events until turn_end
     POST /api/sessions/{id}/stop       cancel the running turn
+    PUT  /api/sessions/{id}/files/{name}   upload a data file (raw body) to data/
+    GET  /api/sessions/{id}/files/{path}   download a file from the chat's workspace
     GET  /api/agents | /api/models | /api/config
 
 In production (``make serve``) it also serves the built web UI from web/dist.
@@ -14,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,20 +25,25 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
+from baseagent.workspace import DATA_DIR, Workspace
 
 ROOT = Path(__file__).resolve().parents[3]
 WEB_DIST = ROOT / "web" / "dist"
+WORKSPACE_DIR = ROOT / "workspace"  # git-ignored; one folder per chat
 KEEPALIVE_SECONDS = 15
+DEFAULT_AGENT = "coordinator"
+UPLOAD_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".xlsx", ".xls", ".parquet"}
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # Model ids from /v1/models that are not chat-completions text models.
 _EXCLUDE = ("audio", "realtime", "tts", "transcribe", "image", "embedding", "moderation",
@@ -44,12 +53,30 @@ SUGGESTED_MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1", "gpt-4.1-min
 
 
 class CreateSession(BaseModel):
-    agent: str = "general"
+    agent: str = DEFAULT_AGENT
     settings: dict[str, Any] | None = None
 
 
 class SendMessage(BaseModel):
     content: str
+    files: list[str] = Field(default_factory=list)  # workspace paths from uploads
+
+
+def safe_filename(name: str) -> str:
+    """A plain file name: no folders, spaces become underscores, odd characters dropped."""
+    base = Path(name.replace("\\", "/")).name
+    base = re.sub(r"[^\w.\-]+", "_", re.sub(r"\s+", "_", base)).strip("._")
+    if not base or not Path(base).stem:
+        raise HTTPException(422, "Invalid file name.")
+    return base
+
+
+def with_attachments(content: str, files: list[str]) -> str:
+    """The message the agent receives: the user's text plus the attached file paths."""
+    if not files:
+        return content
+    label = "Attached file" if len(files) == 1 else "Attached files"
+    return f"{content.rstrip()}\n\n{label}: {', '.join(files)}"
 
 
 def default_model() -> str:
@@ -59,9 +86,11 @@ def default_model() -> str:
     return os.environ.get("OPENAI_MODEL") or "gpt-5-mini"
 
 
-def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> FastAPI:
+def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
+               workspace_dir: Path | None = None) -> FastAPI:
     load_dotenv(ROOT / ".env")  # never overrides real env vars such as Codespaces secrets
-    manager = SessionManager(llm or RoutingLLM(), log_dir or ROOT / "runs")
+    manager = SessionManager(llm or RoutingLLM(), log_dir or ROOT / "runs",
+                             workspace_dir or WORKSPACE_DIR)
     model_cache: dict[str, Any] = {}
 
     @asynccontextmanager
@@ -79,6 +108,11 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> Fas
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    def workspace_of(session: Session) -> Workspace:
+        if session.workspace is None:
+            raise HTTPException(404, "This chat has no file workspace.")
+        return session.workspace
+
     @app.get("/api/health")
     async def health():
         return {"ok": True}
@@ -90,6 +124,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> Fas
             "openai_key_configured": bool(os.environ.get("OPENAI_API_KEY")),
             "base_url_host": urlparse(base_url).netloc,
             "default_model": default_model(),
+            "default_agent": DEFAULT_AGENT,
             "fake_model": FAKE_MODEL,
             "suggested_models": SUGGESTED_MODELS,
         }
@@ -167,6 +202,41 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> Fas
             session.task.cancel()
         return {"stopped": True}
 
+    @app.put("/api/sessions/{session_id}/files/{filename}")
+    async def upload_file(session_id: str, filename: str, request: Request):
+        workspace = workspace_of(session_or_404(session_id))
+        name = safe_filename(filename)
+        if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
+            raise HTTPException(415, "Upload a data file: " + ", ".join(sorted(UPLOAD_SUFFIXES)))
+        target = workspace.resolve(f"{DATA_DIR}/{name}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(f".{name}.part")
+        size = 0
+        try:
+            with partial.open("wb") as out:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(413, f"File is larger than {MAX_UPLOAD_BYTES // 2**20} MB.")
+                    out.write(chunk)
+            if size == 0:
+                raise HTTPException(422, "File is empty.")
+            os.replace(partial, target)  # re-uploading a name replaces the old file
+        finally:
+            partial.unlink(missing_ok=True)
+        return {"name": name, "path": workspace.relative(target), "size": size}
+
+    @app.get("/api/sessions/{session_id}/files/{path:path}")
+    async def download_file(session_id: str, path: str):
+        workspace = workspace_of(session_or_404(session_id))
+        try:
+            file = workspace.resolve(path)
+        except ValueError:
+            raise HTTPException(404, "File not found.") from None
+        if not file.is_file() or any(part.startswith(".") for part in Path(path).parts):
+            raise HTTPException(404, "File not found.")
+        return FileResponse(file, filename=file.name)  # Content-Disposition: attachment
+
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessage):
         session = session_or_404(session_id)
@@ -174,6 +244,17 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> Fas
             raise HTTPException(409, "The agent is still working on the previous message.")
         if not body.content.strip():
             raise HTTPException(422, "Message is empty.")
+        files: list[str] = []
+        if body.files:
+            workspace = workspace_of(session)
+            for rel in body.files:
+                try:
+                    path = workspace.resolve(rel)
+                except ValueError:
+                    raise HTTPException(422, f"Invalid attachment path {rel!r}.") from None
+                if not path.is_file():
+                    raise HTTPException(422, f"Attached file {rel!r} was not found; upload it again.")
+                files.append(workspace.relative(path))
 
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -181,7 +262,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None) -> Fas
             await queue.put(event)
 
         session.agent.emit_callback = emit
-        task = asyncio.create_task(session.agent.run(body.content))
+        task = asyncio.create_task(session.agent.run(with_attachments(body.content, files)))
         task.add_done_callback(lambda _: queue.put_nowait(None))
         session.task = task
         session.updated = time.time()

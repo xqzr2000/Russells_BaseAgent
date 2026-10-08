@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# UI
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+
+# Secrets
+.env
+
+# Runtime output: chat logs, and each chat's uploads and notebooks
+runs/
+workspace/

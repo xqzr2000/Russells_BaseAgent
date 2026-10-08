@@ -5,6 +5,7 @@ import type {
   ServerConfig,
   SessionDetail,
   SessionSummary,
+  UploadedFile,
 } from "./types";
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -38,18 +39,26 @@ export const api = {
     json<AgentSettings>(`/api/sessions/${id}/settings`, { method: "PATCH", body: JSON.stringify(changes) }),
   deleteSession: (id: string) => json<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   stop: (id: string) => json<{ stopped: boolean }>(`/api/sessions/${id}/stop`, { method: "POST" }),
+  /** Upload a file into the chat's workspace (data/<name>); the raw file is the body. */
+  uploadFile: (id: string, file: File) =>
+    json<UploadedFile>(`/api/sessions/${id}/files/${encodeURIComponent(file.name)}`, {
+      method: "PUT",
+      body: file,
+      headers: { "Content-Type": "application/octet-stream" },
+    }),
 };
 
 /** Send a message and call onEvent for each Server-Sent Event until the turn ends. */
 export async function streamTurn(
   sessionId: string,
   content: string,
+  files: string[],
   onEvent: (event: AgentEvent) => void,
 ): Promise<void> {
   const response = await fetch(`/api/sessions/${sessionId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, files }),
   });
   if (!response.ok || !response.body) {
     let detail = response.statusText;

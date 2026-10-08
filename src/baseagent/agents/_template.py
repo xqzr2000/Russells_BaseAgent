@@ -50,6 +50,7 @@ class TemplateAgent(BaseAgent):
     examples = ["A starter prompt that shows off this agent."]
     default_settings = {"max_steps": 20}
     skills_dir = None  # or Path(...) to a folder of SKILL.md skills
+    delegatable = False  # True: the coordinator can hand this agent tasks via `delegate`
 
     def __init__(self, *args, workdir: str = ".", **kwargs):
         super().__init__(*args, **kwargs)

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
-from baseagent.events import Attachment
+from baseagent.events import Attachment, ToolProgress
 
 if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
@@ -42,11 +42,18 @@ class ToolContext:
 
     agent: "BaseAgent"
     call_id: str
+    turn: int = 0
+    step: int = 0
 
     @property
     def state(self) -> dict[str, Any]:
         """Per-agent scratch space that persists across turns."""
         return self.agent.state
+
+    async def progress(self, message: str) -> None:
+        """Show a status line under this tool call while it runs."""
+        await self.agent.emit(ToolProgress(turn=self.turn, step=self.step,
+                                           call_id=self.call_id, message=message))
 
 
 @dataclass

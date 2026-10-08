@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -12,6 +13,9 @@ from typing import Any
 from baseagent.agent import AgentSettings, BaseAgent
 from baseagent.agents import get_agent_class
 from baseagent.llm import LLMClient
+from baseagent.workspace import Workspace
+
+ATTACHED = re.compile(r"\n\nAttached files?: [^\n]+$")  # added by app.with_attachments
 
 
 @dataclass
@@ -27,9 +31,13 @@ class Session:
         return self.task is not None and not self.task.done()
 
     @property
+    def workspace(self) -> Workspace | None:
+        return self.agent.workspace
+
+    @property
     def title(self) -> str:
         first = next((e for e in self.agent.transcript if e["type"] == "turn_start"), None)
-        text = first["user_message"] if first else "New chat"
+        text = ATTACHED.sub("", first["user_message"]) if first else "New chat"
         return text if len(text) <= 60 else text[:57] + "..."
 
     def summary(self) -> dict[str, Any]:
@@ -42,16 +50,23 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self, llm: LLMClient, log_dir: Path | None = None):
+    def __init__(self, llm: LLMClient, log_dir: Path | None = None,
+                 workspace_root: Path | None = None):
         self.llm = llm
         self.log_dir = log_dir
+        self.workspace_root = workspace_root  # each chat gets <root>/<session id>/
         self.sessions: dict[str, Session] = {}
 
     def create(self, agent_name: str, overrides: dict[str, Any] | None = None) -> Session:
         cls = get_agent_class(agent_name)
         settings = cls.make_settings(**(overrides or {}))
         session_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
-        agent = cls(self.llm, settings, log_dir=self.log_dir, session_id=session_id)
+        workspace = None
+        if self.workspace_root is not None:
+            workspace = Workspace(self.workspace_root / session_id,
+                                  url_prefix=f"/api/sessions/{session_id}/files")
+        agent = cls(self.llm, settings, log_dir=self.log_dir, session_id=session_id,
+                    workspace=workspace)
         session = Session(session_id, agent)
         self.sessions[session_id] = session
         return session

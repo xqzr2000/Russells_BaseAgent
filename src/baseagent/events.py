@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 class Attachment(BaseModel):
     """Rich output for the UI (not sent to the model): an image, table, or file.
 
-    The EDA agent will use this for seaborn charts (``image/png``) and
-    dataframe previews (``text/markdown`` or ``text/html``).
+    ``kind="file"`` with a ``url`` is a download (the data science agent's
+    notebook); the chat room lists a turn's files under its answer.
     """
 
     kind: Literal["image", "table", "file", "text"]
@@ -92,6 +92,15 @@ class ToolEnd(_Event):
     attachments: list[Attachment] = Field(default_factory=list)
 
 
+class ToolProgress(_Event):
+    """A status line from a tool that is still running (e.g. a delegated agent's step)."""
+
+    type: Literal["tool_progress"] = "tool_progress"
+    step: int
+    call_id: str
+    message: str
+
+
 class UsageEvent(_Event):
     type: Literal["usage"] = "usage"
     step: int
@@ -129,6 +138,7 @@ AgentEvent = Annotated[
     | TextDelta
     | AssistantMessage
     | ToolStart
+    | ToolProgress
     | ToolEnd
     | UsageEvent
     | Compaction
