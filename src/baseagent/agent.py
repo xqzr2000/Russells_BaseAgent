@@ -8,11 +8,13 @@ Override these (all optional):
     examples                     starter prompts for an empty chat
     default_settings             model/step defaults for this agent
     skills_dir                   folder of SKILL.md skills for this agent
+    delegatable                  True lets a coordinator hand it tasks
     system_prompt()              standing instructions
     get_tools()                  the tools it may call
     async setup() / close()      async resources (a Python kernel, a DB...)
     is_final(message)            when a turn is finished
     format_observation(result)   how a tool result is shown to the model
+    output_files()               files it produced for the user to download
 
 Rule for subclasses: ``__init__`` only stores options. Anything that needs
 I/O or depends on subclass state belongs in ``setup()``, which the loop awaits
@@ -31,10 +33,12 @@ from typing import Any, Awaitable, Callable, ClassVar
 from pydantic import BaseModel
 
 from baseagent import events as ev
+from baseagent.events import Attachment
 from baseagent.llm import LLMClient, ModelSettings
 from baseagent.memory import Memory, rough_tokens, truncate
 from baseagent.skills import SkillLibrary
 from baseagent.tools import Tool, ToolContext, ToolError, ToolResult
+from baseagent.workspace import Workspace
 
 Emit = Callable[[BaseModel], Awaitable[None]]
 
@@ -73,6 +77,7 @@ class BaseAgent:
     default_settings: ClassVar[dict[str, Any]] = {}
     examples: ClassVar[list[str]] = []  # starter prompts shown in the chat room
     skills_dir: ClassVar[str | Path | None] = None
+    delegatable: ClassVar[bool] = False  # offered to the coordinator's `delegate` tool
 
     def __init__(
         self,
@@ -81,6 +86,7 @@ class BaseAgent:
         emit: Emit | None = None,
         log_dir: str | Path | None = None,
         session_id: str = "local",
+        workspace: Workspace | None = None,
     ) -> None:
         # Store options only; see the module docstring.
         self.llm = llm
@@ -88,6 +94,7 @@ class BaseAgent:
         self.emit_callback: Emit = emit or _ignore
         self.log_dir = Path(log_dir) if log_dir else None
         self.session_id = session_id
+        self.workspace = workspace  # this chat's file folder (uploads, outputs)
 
         self.memory = Memory()
         self.state: dict[str, Any] = {}  # free scratch space for tools/subclasses
@@ -129,6 +136,10 @@ class BaseAgent:
     def format_observation(self, result: ToolResult) -> str:
         text = f"Error: {result.content}" if result.is_error else result.content
         return truncate(text)
+
+    def output_files(self) -> list[Attachment]:
+        """Files this agent has produced for the user (shown as downloads after a delegation)."""
+        return []
 
     # ------------------------------------------------------------- lifecycle
 
@@ -271,12 +282,12 @@ class BaseAgent:
                         is_error=True)
                 else:
                     exclusive_used = True
-                    result = await self.run_tool(tool, arguments, call["id"])
+                    result = await self.run_tool(tool, arguments, call["id"], turn, step)
             elif tool is None:
                 result = ToolResult(f"Unknown tool {name!r}. Available tools: "
                                     f"{', '.join(self._tools) or '(none)'}.", is_error=True)
             else:
-                result = await self.run_tool(tool, arguments, call["id"])
+                result = await self.run_tool(tool, arguments, call["id"], turn, step)
             content = self.format_observation(result)
             await self.emit(ev.ToolEnd(
                 turn=turn, step=step, call_id=call["id"], name=name, content=content,
@@ -286,11 +297,13 @@ class BaseAgent:
             observations.append({"role": "tool", "tool_call_id": call["id"], "content": content})
         return observations
 
-    async def run_tool(self, tool: Tool, arguments: str, call_id: str) -> ToolResult:
+    async def run_tool(self, tool: Tool, arguments: str, call_id: str,
+                       turn: int = 0, step: int = 0) -> ToolResult:
         try:
             parsed = tool.parse(arguments)
             timeout = tool.timeout or self.settings.tool_timeout
-            return await asyncio.wait_for(tool(parsed, ToolContext(self, call_id)), timeout)
+            ctx = ToolContext(self, call_id, turn, step)
+            return await asyncio.wait_for(tool(parsed, ctx), timeout)
         except ToolError as exc:
             return ToolResult(str(exc), is_error=True)
         except asyncio.TimeoutError:

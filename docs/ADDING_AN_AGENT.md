@@ -28,6 +28,8 @@ agent, and the UI renders any tool's results and attachments.
 | `format_observation(result)` | `Error: ` prefix + head/tail truncation | results need special formatting |
 | `default_settings` | `AgentSettings()` | different step limit, compaction, model |
 | `skills_dir` | none | the agent has `SKILL.md` playbooks |
+| `delegatable` | `False` | the coordinator should be able to hand it tasks |
+| `output_files()` | none | it produces files the user should download after a delegation |
 
 ### The three subclassing rules
 
@@ -69,104 +71,60 @@ def describe_column(column: str, top_n: int = 10, ctx: ToolContext = None) -> To
   tools that change shared state). `@tool(timeout=300)` overrides the
   per-call timeout.
 
-## Plan for the EDA agent
+## Delegation: making a specialist the coordinator can use
 
-Goal: the agent loads a CSV, explores it with pandas and seaborn in a
-**persistent Python kernel**, and the chat room shows its charts inline.
+The chat room's default agent is the **coordinator**. It answers simple
+questions itself and hands specialized work to other agents through one tool,
+`delegate(agent, task)` (see `delegation.py`):
 
-### 1. Dependencies
+* Any registered agent with `delegatable = True` appears in that tool's
+  description, using its `name` and `description`. Write the `description`
+  for the coordinator: what the agent does and what to put in the task.
+* The specialist runs its own loop with its own memory. Only its final answer
+  (and `output_files()`) goes back to the coordinator, so the coordinator's
+  context stays small. The specialist cannot see the conversation, which is
+  why the coordinator is told to write self-contained tasks.
+* One specialist instance per chat, created on first use and kept for
+  follow-ups. It follows the chat's model choice (`model`,
+  `reasoning_effort`, `temperature`) but keeps its own step limits.
+* Its steps show up as progress under the `delegate` call
+  (`ctx.progress(...)`), and its full trajectory is logged to
+  `runs/<session>.<agent>.json`.
 
-```bash
-uv add pandas seaborn matplotlib ipykernel jupyter-client
-```
+Nothing in the coordinator changes when you add a specialist.
 
-### 2. A kernel sandbox (`src/baseagent/sandbox/kernel.py`)
+## Files: workspaces, uploads and downloads
 
-A Jupyter kernel keeps variables between calls, like notebook cells, and
-reports charts as `image/png` display data.
+Each chat gets a folder, `workspace/<session id>/` (`agent.workspace`).
+Files dropped into the chat are uploaded to its `data/` folder and listed at
+the end of the user's message ("Attached file: data/sales.csv"). Any file in
+the workspace can be offered as a download: return
+`Attachment(kind="file", url=workspace.url(path), title=...)` from a tool, and
+the chat room lists it under the turn's answer. Specialists share the
+coordinator's workspace.
 
-```python
-from jupyter_client.manager import AsyncKernelManager
+## How the data science agent works
 
-class KernelSandbox:
-    async def start(self, cwd: str):
-        self.km = AsyncKernelManager(kernel_name="python3")
-        await self.km.start_kernel(cwd=cwd)
-        self.kc = self.km.client()
-        self.kc.start_channels()
-        await self.kc.wait_for_ready(timeout=60)
-        await self.run("%matplotlib inline\nimport pandas as pd, seaborn as sns, matplotlib.pyplot as plt")
+* `sandbox/kernel.py`: `KernelSandbox`, one IPython kernel in this project's
+  `.venv` (so every package in the `datascience` dependency group is
+  importable), started in the chat's workspace with secret environment
+  variables removed. It handles errors, timeouts (interrupt, variables
+  survive), crashes (restart) and Stop (interrupt).
+* `sandbox/notebook.py`: `NotebookSession` (kernel + `.ipynb` recorder) and
+  the `run_cell(code, note)` tool. Each cell is appended to the notebook with
+  its outputs, and the file is saved after every cell. Any agent can reuse
+  this: start a `NotebookSession` in `setup()`, keep it as `self.notebook`,
+  and add `run_cell` to its tools.
+* `agents/data_science.py`: the EDA instructions, and a `run()` wrapper that
+  frames each request in the notebook with "## Request" and "## Findings".
 
-    async def run(self, code: str, timeout: float = 120):
-        msg_id = self.kc.execute(code)
-        text, images, error = [], [], None
-        while True:
-            msg = await self.kc.get_iopub_msg(timeout=timeout)
-            if msg["parent_header"].get("msg_id") != msg_id:
-                continue
-            kind, content = msg["msg_type"], msg["content"]
-            if kind == "stream":
-                text.append(content["text"])
-            elif kind in ("execute_result", "display_data"):
-                data = content["data"]
-                if "image/png" in data:
-                    images.append(data["image/png"])        # base64 already
-                elif "text/plain" in data:
-                    text.append(data["text/plain"])
-            elif kind == "error":
-                error = f"{content['ename']}: {content['evalue']}"
-            elif kind == "status" and content["execution_state"] == "idle":
-                return "".join(text), images, error
+The model reads text only: charts are saved into the notebook for the user,
+and the prompt tells the agent to base conclusions on printed numbers.
 
-    async def stop(self):
-        self.kc.stop_channels()
-        await self.km.shutdown_kernel(now=True)
-```
+### Ideas for later
 
-### 3. The agent (`src/baseagent/agents/eda.py`)
-
-```python
-@tool(timeout=300)
-async def run_python(code: str, ctx: ToolContext) -> ToolResult:
-    """Run Python in the persistent analysis kernel (variables persist).
-    pandas as pd, seaborn as sns, matplotlib.pyplot as plt are imported.
-
-    Args:
-        code: Python code. End with plt.show() to display a chart.
-    """
-    text, images, error = await ctx.agent.kernel.run(code)
-    content = (text or "(no output)") + (f"\nError: {error}" if error else "")
-    content += f"\n[{len(images)} chart(s) shown to the user]" if images else ""
-    return ToolResult(content, is_error=bool(error), attachments=[
-        Attachment(kind="image", mime="image/png", data=img) for img in images])
-
-@register_agent
-class EDAAgent(BaseAgent):
-    name, title = "eda", "Data scientist (EDA)"
-    description = "Explores a dataset with pandas and seaborn and charts what it finds."
-    default_settings = {"max_steps": 30, "compact_threshold_tokens": 24000}
-    skills_dir = ROOT / "skills" / "eda"           # e.g. an eda-workflow skill
-
-    async def setup(self):
-        self.kernel = KernelSandbox()
-        await self.kernel.start(cwd=str(ROOT / "data"))
-
-    async def close(self):
-        await self.kernel.stop()
-
-    def get_tools(self):
-        return [run_python, list_data_files]
-```
-
-### 4. Then, in order
-
-* Add a `data/` folder (git-ignored) and a `list_data_files` tool.
-* Add an `eda-workflow` skill: profile → missing values → univariate →
-  bivariate → findings, with conventions for chart titles and sizes.
-* Optional: send each chart back to the model as an image so it can read
-  its own plots (vision models), and export the session as `.ipynb`.
-* Isolation: the kernel first runs inside the dev container, which is
-  fine for your own datasets. Before running untrusted data or code, move
-  the kernel into a Docker container (add the `docker-in-docker` devcontainer
-  feature) with no network and CPU/memory limits; the agent code doesn't
-  change, only `KernelSandbox.start`.
+* EDA recipes as skills (`skills/data_science/...`): missing-data review,
+  outliers, correlations, time series.
+* Let a vision model see its charts (send `image/png` outputs back to it).
+* Run the kernel in its own container (no network, CPU and memory limits)
+  before analysing untrusted data. Only `KernelSandbox.start` changes.
