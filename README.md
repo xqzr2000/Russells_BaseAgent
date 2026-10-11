@@ -99,7 +99,8 @@ make dev
 
 ### See this chat room in action.
 
-https://github.com/user-attachments/assets/7746dc0f-3124-4213-a29c-baa4d36d265c
+https://github.com/user-attachments/assets/175ca181-0886-4434-9b4b-8a1a695c78e1
+
 
 ## Repo tree
 
