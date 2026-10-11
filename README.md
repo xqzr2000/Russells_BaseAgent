@@ -103,17 +103,5 @@ https://github.com/user-attachments/assets/7746dc0f-3124-4213-a29c-baa4d36d265c
 
 ## Repo tree
 
-```
-src/baseagent/
-  agent.py              BaseAgent: the ReAct loop every agent inherits
-  tools.py, events.py   typed tools; events the UI and logs listen to
-  delegation.py         agent-as-tool: `delegate` and the sub-agent pool
-  workspace.py          each chat's folder (uploads in data/, outputs)
-  sandbox/              persistent Jupyter kernel + .ipynb recorder, `run_cell`
-  agents/               coordinator, data_science, general, _template
-  server/               FastAPI: sessions, SSE streaming, file upload/download
-web/                    React chat room (Vite)
-tests/                  offline tests (scripted model, real kernel)
-docs/ADDING_AN_AGENT.md how to write a specialized agent
-```
+Still evolving...
 
