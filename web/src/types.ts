@@ -30,6 +30,7 @@ export type AgentEvent =
   | (Base & { type: "text_delta"; step: number; delta: string })
   | (Base & { type: "assistant_message"; step: number; content: string; tool_calls: ToolCallInfo[] })
   | (Base & { type: "tool_start"; step: number; call_id: string; name: string; arguments: string })
+  | (Base & { type: "tool_progress"; step: number; call_id: string; message: string })
   | (Base & {
       type: "tool_end";
       step: number;
@@ -91,6 +92,14 @@ export interface ServerConfig {
   openai_key_configured: boolean;
   base_url_host: string;
   default_model: string;
+  default_agent: string;
   fake_model: string;
   suggested_models: string[];
+}
+
+/** A file uploaded into the chat's workspace, waiting to be sent with a message. */
+export interface UploadedFile {
+  name: string;
+  path: string; // workspace-relative, e.g. "data/titanic.csv"
+  size: number;
 }

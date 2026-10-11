@@ -8,6 +8,7 @@ export interface ToolRun {
   result?: string;
   isError?: boolean;
   durationMs?: number;
+  progress?: string; // latest status line while it runs (e.g. a delegated agent's step)
   attachments: Attachment[];
 }
 
@@ -23,6 +24,7 @@ export interface Step {
 export interface Turn {
   index: number;
   userMessage: string;
+  userFiles: string[]; // files attached to the message, e.g. "data/titanic.csv"
   model: string;
   steps: Step[];
   notes: { kind: "warning" | "error" | "compaction"; text: string; detail?: string }[];
@@ -30,6 +32,28 @@ export interface Turn {
   stopReason?: string;
   usage?: Usage;
   ended: boolean;
+}
+
+// The server appends "\n\nAttached file(s): a, b" to a message (see with_attachments in app.py).
+const ATTACHED = /\n\nAttached files?: ([^\n]+)$/;
+
+export function splitAttachments(message: string): { text: string; files: string[] } {
+  const match = ATTACHED.exec(message);
+  if (!match) return { text: message, files: [] };
+  return { text: message.slice(0, match.index), files: match[1].split(", ") };
+}
+
+/** Every downloadable file the turn's tools produced, newest version of each URL once. */
+export function turnFiles(turn: Turn): Attachment[] {
+  const byUrl = new Map<string, Attachment>();
+  for (const step of turn.steps) {
+    for (const run of step.tools) {
+      for (const item of run.attachments) {
+        if (item.kind === "file" && item.url) byUrl.set(item.url, item);
+      }
+    }
+  }
+  return [...byUrl.values()];
 }
 
 export function buildTurns(events: AgentEvent[]): Turn[] {
@@ -46,9 +70,11 @@ export function buildTurns(events: AgentEvent[]): Turn[] {
 
   for (const event of events) {
     if (event.type === "turn_start") {
+      const { text, files } = splitAttachments(event.user_message);
       const turn: Turn = {
         index: event.turn,
-        userMessage: event.user_message,
+        userMessage: text,
+        userFiles: files,
         model: event.model,
         steps: [],
         notes: [],
@@ -85,6 +111,11 @@ export function buildTurns(events: AgentEvent[]): Turn[] {
         if (!step.tools.some((t) => t.id === event.call_id)) {
           step.tools.push({ id: event.call_id, name: event.name, args: event.arguments, attachments: [] });
         }
+        break;
+      }
+      case "tool_progress": {
+        const run = stepOf(turn, event.step).tools.find((t) => t.id === event.call_id && t.result === undefined);
+        if (run) run.progress = event.message;
         break;
       }
       case "tool_end": {

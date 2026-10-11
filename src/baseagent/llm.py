@@ -213,14 +213,23 @@ class ScriptedLLM:
         return [FAKE_MODEL]
 
 
+FAKE_EDA_CODE = """\
+df = pd.read_csv({path!r})
+print(f"Rows: {{len(df):,}}  Columns: {{df.shape[1]}}  Duplicate rows: {{df.duplicated().sum()}}")
+pd.DataFrame({{"dtype": df.dtypes.astype(str), "missing": df.isna().sum(), "unique": df.nunique()}})"""
+
+
 class FakeLLM:
     """A tiny rule-based "model" so the chat room works without an API key.
 
     It calls ``calculator`` for arithmetic, ``current_time`` when asked the
-    time, and otherwise echoes. Good for checking the UI and the loop.
+    time, ``delegate`` / ``run_cell`` when a message names a data file (an
+    offline walk-through of the EDA flow), and otherwise echoes. Good for
+    checking the UI and the loop.
     """
 
     _ARITH = re.compile(r"[-+*/().\d\s^%]{3,}")
+    _DATA_FILE = re.compile(r"[\w\-./]+\.(?:csv|tsv)\b", re.IGNORECASE)
 
     async def chat(self, messages, settings, tools=None, on_text=None) -> LLMResponse:
         tool_names = {t["function"]["name"] for t in tools or []}
@@ -231,10 +240,19 @@ class FakeLLM:
             user_text = json.dumps(user_text)
         results = [m for m in messages[(last_user or 0) + 1:] if m["role"] == "tool"]
 
+        data_file = self._DATA_FILE.search(user_text)
         if not tools:  # compaction request
             reply = "Summary: conversation so far handled by the fake model."
         elif results:
-            reply = f"The tool returned: **{results[-1]['content']}**"
+            result = results[-1]["content"]
+            fence = "~~~~" if "```" in result else "```"  # results can hold fenced text
+            reply = (f"The tool returned: **{result}**" if "\n" not in result
+                     else f"The tool returned:\n\n{fence}\n{result}\n{fence}")
+        elif "delegate" in tool_names and data_file:
+            return self._call("delegate", {"agent": "data_science", "task": user_text})
+        elif "run_cell" in tool_names and data_file:
+            return self._call("run_cell", {"code": FAKE_EDA_CODE.format(path=data_file.group()),
+                                           "note": "## Basic EDA (offline fake model)"})
         else:
             expression = self._ARITH.search(user_text)
             if "calculator" in tool_names and expression and re.search(r"\d", expression.group()):

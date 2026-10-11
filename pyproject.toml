@@ -11,17 +11,36 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    "jupyter-client>=8.10.0",
+    "ipykernel>=7.4.0",
+    "nbformat>=5.11.1",
 ]
 
 [project.scripts]
 baseagent-server = "baseagent.server.app:main"
 
 [dependency-groups]
+# Libraries available inside the DataScienceAgent's Jupyter kernel. The kernel
+# runs in this same .venv, so anything added here can be imported in its cells.
+datascience = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.15.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
 ]
+
+[tool.uv]
+default-groups = ["dev", "datascience"]  # `uv sync` installs both
 
 [build-system]
 requires = ["hatchling"]

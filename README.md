@@ -32,36 +32,56 @@ Instead of re-implementing the agent loop each time, you can focus on the parts 
 
 ### Example: `class DataScienceAgent(BaseAgent):`
 
-Conceptually, a subclass only needs to describe what makes it different:
+A subclass only describes what makes it different. This is the shape of the real one in
+[`agents/data_science.py`](src/baseagent/agents/data_science.py):
 
 ```python
+@register_agent
 class DataScienceAgent(BaseAgent):
     name = "data_science"
-    title = "Data Science Assistant"
-    description = "Performs exploratory data analysis on datasets."
+    title = "Data scientist"
+    description = "Explores tabular data files in a persistent Jupyter kernel ..."
+    delegatable = True  # the coordinator can hand it tasks
 
-    default_settings = {
-        "model": "example-model",
-        "max_steps": 10,
-    }
+    async def setup(self):  # one kernel + one notebook per chat
+        self.notebook = NotebookSession(self.workspace, title=...)
+        await self.notebook.start()
 
     def system_prompt(self) -> str:
-        return (
-            "You are a data science assistant. "
-            "Help users explore datasets, summarize structure, "
-            "compute descriptive statistics, and identify patterns or anomalies. "
-            "Use the available tools when needed."
-        )
+        return SYSTEM_PROMPT  # the basic EDA checklist
 
-    def get_tools(self) -> list[Tool]:
-        return [load_dataset_tool, describe_dataset_tool, plot_histogram_tool]
+    def get_tools(self):
+        return [run_cell]  # runs Python as a notebook cell, saves the .ipynb
 ```
+
+## Agents in the chat room
+
+| Agent | What it does |
+|---|---|
+| **Coordinator** (default) | Your main chat. Answers simple things itself and delegates specialized work to any agent marked `delegatable`. |
+| **Data scientist** | Basic EDA in a Jupyter kernel: rows and columns, types, missing values, unique values, duplicates, summary statistics. Returns a summary and a downloadable `.ipynb`. |
+| **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
+
+### EDA on a CSV
+
+1. Drag a CSV into the chat (or click the paperclip).
+2. Ask: *do EDA on it*.
+3. The coordinator delegates to the data scientist. Its progress appears under the
+   `delegate` step; when it's done you get a summary and a **Download** card for the notebook.
+
+The kernel runs inside the Codespace, in `workspace/<chat id>/` next to the uploaded
+`data/` folder, so the notebook re-runs from the top there. Nothing in `workspace/` or
+`runs/` is committed. Without an API key, the offline `fake-echo` model walks the same
+path with one canned EDA cell, which is handy for checking the plumbing.
 
 ## GitHub Codespaces Quick Start
 
 ### 1. Fork or clone this repository, then create a Codespace
 - If you like the project, give it a star.
 - The dev container installs `Python 3.12`, `Node.js 22`, and `uv`, then runs `uv sync` and `npm ci`.
+- `uv sync` also installs the data science stack the agent's kernel uses (pandas, numpy, scipy,
+  matplotlib, seaborn, scikit-learn, statsmodels, pyarrow, openpyxl). In an existing Codespace,
+  run `uv sync` once after pulling.
 
 ### 2. Add `OPENAI_API_KEY` as a Codespaces secret
 - In GitHub, go to **Settings → Codespaces → New secret**
@@ -82,5 +102,18 @@ make dev
 https://github.com/user-attachments/assets/7746dc0f-3124-4213-a29c-baa4d36d265c
 
 ## Repo tree
-- Still evolving.
+
+```
+src/baseagent/
+  agent.py              BaseAgent: the ReAct loop every agent inherits
+  tools.py, events.py   typed tools; events the UI and logs listen to
+  delegation.py         agent-as-tool: `delegate` and the sub-agent pool
+  workspace.py          each chat's folder (uploads in data/, outputs)
+  sandbox/              persistent Jupyter kernel + .ipynb recorder, `run_cell`
+  agents/               coordinator, data_science, general, _template
+  server/               FastAPI: sessions, SSE streaming, file upload/download
+web/                    React chat room (Vite)
+tests/                  offline tests (scripted model, real kernel)
+docs/ADDING_AN_AGENT.md how to write a specialized agent
+```
 

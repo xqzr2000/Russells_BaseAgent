@@ -9,9 +9,9 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-uv sync                          # Python deps from pyproject.toml + uv.lock into .venv
+uv sync                          # Python deps (incl. the data science kernel's) into .venv
 (cd web && npm ci)               # UI deps from web/package-lock.json
-[ -f .env ] || cp .env.example .env
+if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi
 
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   echo "OPENAI_API_KEY found in the environment."
