@@ -1,5 +1,6 @@
 /* BaseAgent chat room. Two signal colours: indigo = the agent/model,
-   amber = tool activity. They meet on the trace rail of each turn. */
+   amber = tool activity. They meet on the trace rail of each turn.
+   Light theme only: the chat pane sits on a sunny meadow. */
 
 :root {
   --paper: #eef1f2;
@@ -25,30 +26,10 @@
   --radius-lg: 14px;
   --radius: 9px;
   --radius-sm: 6px;
+  --glass: rgba(255, 255, 255, 0.84);
+  --glass-edge: rgba(255, 255, 255, 0.65);
+  --float-shadow: 0 14px 40px rgba(28, 52, 12, 0.22), 0 2px 6px rgba(28, 52, 12, 0.1);
   color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #12191e;
-    --surface: #1a2329;
-    --sunken: #0e1418;
-    --ink: #e4eaed;
-    --ink-2: #a9b6bd;
-    --ink-3: #7d8b93;
-    --line: #2b373e;
-    --agent: #8f94f0;
-    --agent-soft: #262a52;
-    --tool: #f2b544;
-    --tool-soft: #3a2e14;
-    --danger: #ff8a80;
-    --danger-soft: #3d1c1a;
-    --ok: #7fd1a0;
-    --user-bubble: #2a363e;
-    --user-ink: #eef3f5;
-    --on-agent: #14163a;
-    color-scheme: dark;
-  }
 }
 
 * { box-sizing: border-box; }
@@ -69,7 +50,8 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 
 /* ---------- layout ---------- */
 .app { display: grid; grid-template-columns: 272px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
-.main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+.main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; position: relative; isolation: isolate; background: #a9cf63; }
+.main > :not(.meadow, .drop-overlay) { position: relative; z-index: 1; }
 .column { max-width: 780px; margin: 0 auto; padding: 0 20px; }
 
 /* ---------- sidebar ---------- */
@@ -96,7 +78,8 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 /* ---------- top bar ---------- */
 .topbar {
   display: flex; align-items: center; gap: 10px; padding: 12px 20px;
-  border-bottom: 1px solid var(--line); background: var(--paper);
+  border-bottom: 1px solid var(--glass-edge);
+  background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
 }
 .agent-picker select {
   appearance: none; border: 0; background: transparent; cursor: pointer;
@@ -137,8 +120,18 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 .session-item:hover .icon-btn.subtle, .icon-btn.subtle:focus-visible { opacity: 1; }
 
 /* ---------- conversation ---------- */
-.conversation { overflow-y: auto; min-height: 0; padding: 28px 0 8px; }
-.empty { padding: 8vh 0 24px; }
+.conversation {
+  overflow-y: auto; min-height: 0; padding: 26px 0 8px;
+  width: min(780px, calc(100% - 32px)); margin: 14px auto 0;
+  background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 20px;
+  backdrop-filter: blur(18px) saturate(1.25); -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  box-shadow: var(--float-shadow);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.conversation .column { max-width: none; }
+.empty { padding: 5vh 0 24px; }
+/* during the intro video only the composer shows, so Jack's run isn't covered */
+.main.intro .conversation { opacity: 0; transform: translateY(14px); pointer-events: none; }
 .empty h1 { font-size: 34px; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 8px; font-weight: 700; }
 .empty > p { color: var(--ink-2); margin: 0 0 20px; max-width: 60ch; }
 .examples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
@@ -255,19 +248,22 @@ pre.code {
 .markdown blockquote { margin: 0 0 0.75em; padding-left: 12px; border-left: 3px solid var(--line); color: var(--ink-2); }
 
 /* ---------- composer ---------- */
-.composer-wrap { padding: 10px 0 14px; background: linear-gradient(transparent, var(--paper) 30%); }
+.composer-wrap { padding: 14px 0 22px; }
+.composer-wrap .column { max-width: 760px; }
 .composer {
   display: flex; align-items: flex-end; gap: 8px; padding: 8px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: var(--surface); border: 1px solid var(--glass-edge); border-radius: 18px;
+  box-shadow: var(--float-shadow);
 }
 .composer:focus-within { border-color: var(--agent); }
 .composer textarea {
   flex: 1; resize: none; border: 0; outline: none; background: transparent;
   padding: 7px 8px; max-height: 220px; line-height: 1.5;
 }
-.composer-hint { margin: 6px 4px 0; }
+.composer-hint { margin: 8px 4px 0; text-align: center; color: #fff; text-shadow: 0 1px 3px rgba(20, 40, 8, 0.7); }
 .composer .attach { height: 36px; width: 36px; display: grid; place-items: center; }
 .pending-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.pending-file, .form-error { box-shadow: 0 4px 14px rgba(28, 52, 12, 0.16); }
 .pending-file {
   display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
   border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px;
@@ -295,6 +291,36 @@ pre.code {
 }
 .drop-card .file-icon { width: 28px; height: 28px; color: var(--agent); }
 .form-error { color: var(--danger); background: var(--danger-soft); padding: 8px 12px; border-radius: var(--radius-sm); margin: 0 0 8px; font-size: 14px; }
+
+/* ---------- meadow background (chat pane only) ---------- */
+.meadow { position: absolute; inset: 0; z-index: 0; overflow: hidden; container-type: size; }
+/* a 16:9 scene that covers the pane, like object-fit: cover */
+.meadow-scene {
+  position: absolute; left: 50%; top: 50%; translate: -50% -50%;
+  width: max(100cqw, 177.78cqh); aspect-ratio: 16 / 9;
+}
+.meadow-still, .meadow-video { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; }
+.meadow-video { object-fit: cover; transition: opacity 0.9s ease; }
+.meadow-video.is-fading { opacity: 0; }
+.meadow-dog {
+  position: absolute; translate: -50% -100%;
+  opacity: 0; transition: opacity 0.45s ease;
+  pointer-events: none;
+}
+.meadow-dog.is-shown { opacity: 1; }
+.meadow-dog img { display: block; height: 100%; width: auto; position: relative; user-select: none; }
+.meadow-dog-shadow {
+  position: absolute; left: 12%; right: 12%; bottom: -3%; height: 7%;
+  background: radial-gradient(closest-side, rgba(38, 62, 14, 0.45), rgba(38, 62, 14, 0));
+}
+.meadow.is-intro { cursor: pointer; }
+.meadow-skip {
+  position: absolute; right: 16px; top: 72px; z-index: 2;
+  border: 1px solid var(--glass-edge); border-radius: 999px; padding: 5px 12px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.55); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  font-size: 13px; font-weight: 600; color: var(--ink-2);
+}
+.meadow-skip:hover { background: rgba(255, 255, 255, 0.85); color: var(--ink); }
 
 /* ---------- settings drawer ---------- */
 .drawer-backdrop { position: fixed; inset: 0; background: color-mix(in srgb, var(--ink) 30%, transparent); display: flex; justify-content: flex-end; z-index: 20; }
@@ -345,6 +371,9 @@ pre.code {
   .examples { grid-template-columns: 1fr; }
   .empty h1 { font-size: 28px; }
   .user-bubble { max-width: 92%; }
+  .conversation { width: calc(100% - 20px); margin-top: 10px; border-radius: 16px; }
+  .composer-wrap { padding: 10px 0 14px; }
+  .composer-hint { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

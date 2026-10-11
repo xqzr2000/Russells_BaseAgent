@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
 import { FileIcon, formatSize } from "./components/FileIcon";
+import { Meadow } from "./components/Meadow";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { TurnView } from "./components/TurnView";
 import { buildTurns } from "./turns";
@@ -65,7 +66,13 @@ export default function App() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLFormElement>(null);
   const stickToBottom = useRef(true);
+  const [intro, setIntro] = useState(true);
+  const meadowAvoid = useMemo(() => [scroller, composerRef], []);
+  const endIntro = useCallback(() => setIntro(false), []);
+  // Typing, attaching or dropping a file, or opening a chat cuts the intro short.
+  const skipIntro = draft !== "" || attachments.length > 0 || uploading || dragging || session !== null;
 
   const agent = agents.find((a) => a.name === agentName) ?? agents[0];
   const settings: AgentSettings | null = session?.settings
@@ -283,7 +290,8 @@ export default function App() {
         <p className="sidebar-foot muted small">Chats live in server memory and are logged to runs/.</p>
       </aside>
 
-      <main className="main" {...dropHandlers}>
+      <main className={`main ${intro ? "intro" : ""}`} {...dropHandlers}>
+        <Meadow skip={skipIntro} onIntroEnd={endIntro} avoid={meadowAvoid} />
         {dragging && (
           <div className="drop-overlay" aria-hidden>
             <div className="drop-card">
@@ -379,6 +387,7 @@ export default function App() {
               </div>
             )}
             <form
+              ref={composerRef}
               className="composer"
               onSubmit={(e) => {
                 e.preventDefault();
