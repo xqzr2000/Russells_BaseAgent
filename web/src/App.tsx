@@ -276,6 +276,9 @@ export default function App() {
   const claimDraw = () => {
     if (session) applyChess(session.id, () => api.claimDraw(session.id));
   };
+  const rewindBoard = (to: "back" | "start") => {
+    if (session) applyChess(session.id, () => api.chessRewind(session.id, to));
+  };
 
   const dropHandlers = {
     onDragEnter: (e: DragEvent) => {
@@ -398,7 +401,15 @@ export default function App() {
 
         <div className={`dialog ${board ? "has-board" : ""}`} ref={dialogRef}>
           {board && (
-            <ChessPanel board={board} busy={busy} onMove={chessMove} onClaimDraw={claimDraw} notice={chessNotice} />
+            <ChessPanel
+              board={board}
+              busy={busy || moving}
+              onMove={chessMove}
+              onClaimDraw={claimDraw}
+              onRewind={rewindBoard}
+              onAsk={(message) => send(message)}
+              notice={chessNotice}
+            />
           )}
           <div className="conversation" ref={scroller} onScroll={onScroll}>
             <div className="column">

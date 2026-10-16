@@ -26,7 +26,11 @@ export interface BoardState {
   in_check: boolean;
   game_over: boolean;
   draw_claimable: boolean; // threefold repetition or 50 moves: the user may claim a draw
-  caption: string;
+  caption: string; // the coach's current instruction
+  narration: string; // the last moves in plain words ("You moved your knight...")
+  legal_moves: string[]; // UCI moves the user may play now (empty when the board is locked)
+  can_step_back: boolean;
+  can_restart: boolean; // lessons: the position differs from the lesson's start
   arrows: { from: string; to: string; color: "green" | "blue" | "red" }[];
   highlights: { square: string; color: "yellow" | "green" | "red" | "blue" }[];
   dots: string[];

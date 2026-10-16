@@ -8,6 +8,7 @@
     PUT  /api/sessions/{id}/files/{name}   upload a data file (raw body) to data/
     GET  /api/sessions/{id}/files/{path}   download a file from the chat's workspace
     POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
+    POST /api/sessions/{id}/chess/rewind   step back a move or restart the lesson position
     GET  /api/agents | /api/models | /api/config
 
 In production (``make serve``) it also serves the built web UI from web/dist.
@@ -22,7 +23,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -61,6 +62,10 @@ class CreateSession(BaseModel):
 
 class ChessMove(BaseModel):
     move: str  # UCI from the board (e2e4), SAN also accepted
+
+
+class ChessRewind(BaseModel):
+    to: Literal["back", "start"] = "back"  # back: undo the last move; start: restart the lesson
 
 
 class SendMessage(BaseModel):
@@ -265,6 +270,21 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         session.updated = time.time()
         return {"board": board.view(), "needs_coach": outcome.needs_coach,
                 "message": outcome.message(), "game_over": outcome.game_over}
+
+    @app.post("/api/sessions/{session_id}/chess/rewind")
+    async def chess_rewind(session_id: str, body: ChessRewind):
+        """Take back the user's last move (lessons and games) or restart the lesson position.
+        No model call: the coach sees the live position the next time it answers."""
+        session = session_or_404(session_id)
+        board = chess_board_of(session)
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
+        try:
+            message = board.rewind(body.to)
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": False, "message": message, "game_over": False}
 
     @app.post("/api/sessions/{session_id}/chess/claim-draw")
     async def chess_claim_draw(session_id: str):

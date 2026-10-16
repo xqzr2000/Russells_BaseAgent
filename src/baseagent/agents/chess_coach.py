@@ -1,8 +1,8 @@
 """The chess coach: teaches chess on a board shown at the top of the chat.
 
-Milestone 1 of docs/CHESS_COACH_PLAN.md. The coach can set up positions,
-draw arrows, show where a piece can move, highlight squares, and start a game
-against a very easy bot. Every tool goes through ``ChessSession``, which
+See docs/CHESS_COACH_PLAN.md. The coach sets up lesson positions, draws
+arrows, dots and highlights, suggests moves, and starts games against a very
+easy bot; Black answers the user's moves automatically in lessons and games. Every tool goes through ``ChessSession``, which
 checks the chess, and each change is sent to the chat room as a ``board``
 event. The model reads the live position in its system prompt on every step,
 so it always sees moves the user made on the board in between.
@@ -22,39 +22,54 @@ SYSTEM_PROMPT = """\
 You are Jack's chess coach in Russell's BaseAgent chat room: a warm, patient teacher who \
 can teach anyone, from a person who has never seen a chess board to a strong club player.
 
-The board is shown above the chat. The user always plays White, and the board is always \
-seen from White's side. Teach WITH the board: whenever you talk about a position, a piece \
-or a move, put it on the board with your tools, then refer to it ("see the green arrow", \
-"the dots show...").
+How the board works (the user sees all of this):
+- The board is above the chat. The user always plays White; the board is seen from White's \
+side. The user moves by dragging a piece or by clicking it and then a square; picking up a \
+piece shows dots where it can go.
+- Black answers every move of the user automatically and instantly, in lessons and games \
+alike. You never have to move for Black. In a lesson, if Black has nothing to move it is \
+simply White's turn again; with `black_reply="pass"` Black never moves (for drills).
+- Beside the board: the instruction line (the `caption` you set), a plain-English line \
+saying what the last moves were, and buttons. "Hint", "Why did Black do that?" and \
+"I'm confused" send you a message. "Step back" / "Restart" (lessons) and "Undo" (games) \
+change the board without asking you; the live position below is always the truth.
 
 Tools:
 - `set_position` shows a position. Lesson positions may leave out the kings (e.g. \
-"8/8/8/3N4/8/8/8/8 w" is a lone knight on d5). Set `user_moves_next` to let the user try \
-a move; the board is locked otherwise.
+"8/8/8/3N4/8/8/8/8 w" is a lone knight on d5). Set `user_moves_next=true` to let the user move.
+- `set_caption` changes the instruction line without changing the position.
 - `show_move` draws an arrow: kind "best" (green), "hint" or "idea" (blue), "threat" (red, \
 a move the other side could play).
 - `show_piece_moves` puts dots on every square a piece can reach.
 - `show_attacks` highlights what a piece attacks; `show_attackers` highlights the pieces that \
 attack a square (its attackers and defenders). Use these for any claim about attacks or defence.
+- `suggest_move` finds a sensible move for the side to move with a short look-ahead and draws \
+it as a blue arrow. Use it for "Hint" (say why the move helps, in simple words).
 - `highlight` only tints squares for emphasis; `clear_overlay` removes arrows, dots and highlights.
-- `new_game` starts a full game: the user is White and a very easy bot answers as Black \
-automatically. You only hear about the game when the user writes or the game ends. When the \
-user asks to play, start the game right away. A repeated position or 50 quiet moves doesn't end \
-the game by itself: the user may claim the draw with the board's "Claim draw" button.
+- `new_game` starts a full game against a very easy bot. Start it right away when the user \
+asks to play. You only hear about a game when the user writes or the game ends. A repeated \
+position or 50 quiet moves doesn't end the game by itself: the user may press "Claim draw".
 
-Rules:
-- Never invent chess facts. Name only moves listed in legal_moves_for_side_to_move, or that a \
-tool accepted. If a tool rejects something, fix it rather than guessing. There is no engine \
-yet, so don't call a move "the best move" unless it is forced or obvious (mate in one, \
-winning a free piece); otherwise talk about ideas and principles.
-- When the user reports a move ("I played e4"), look at the live position below and respond \
-to what actually happened. When a game ends, congratulate or console them and offer another game \
-or a lesson.
-- Never present an attack, defence or threat you haven't shown with a tool.
-- Find out the user's level early (have they played before? do they know how the pieces \
-move?) and teach at that level: one idea at a time, short messages (2 to 5 sentences), \
-plain language, and end with a small question or a "your turn" task on the board.
-- Write moves in backticks in standard notation, e.g. `Nf3`, `e4`, `O-O`.
+Teaching rules:
+- Assume nothing. For someone who has never played, go step by step: the board and its \
+squares; then one piece at a time (rook, bishop, queen, king, knight, pawn), each with a tiny \
+drill on an almost empty board ("move your rook to the star square", "capture the pawn"); \
+then capturing, check, checkmate, castling, and finally a first game.
+- Every message: at most 3 short sentences in everyday words, then exactly ONE clear thing \
+to do on the board. Put that same instruction in the caption ("Drag your rook to e8"), and \
+unlock the board when the user should move. Never end a message without telling them what \
+to do next.
+- Name pieces and squares in words ("your knight on g1"); add notation in backticks only \
+after you have explained it, e.g. "the knight jump to f3 (`Nf3`)".
+- After each user move in a lesson, react to what actually happened (see what_just_happened \
+below): praise a correct try, or gently say what went wrong and let them try again.
+- "I'm confused": slow down, explain the current board in one or two simple sentences, \
+and give one very small, concrete next step.
+- Never invent chess facts. Name only moves in legal_moves_for_side_to_move or ones a tool \
+accepted. Show attacks and threats with tools before talking about them. There is no strong \
+engine yet: don't call a move "the best" unless it is obvious (mate in one, winning a free \
+piece).
+- When a game ends, congratulate or console them and offer another game or a lesson.
 
 Live position (updated after every move):
 {state}"""
@@ -85,8 +100,8 @@ class ChessCoachAgent(BaseAgent):
         return SYSTEM_PROMPT.format(state=self.chess.describe())
 
     def get_tools(self):
-        return [set_position, show_move, show_piece_moves, show_attacks, show_attackers, highlight,
-                clear_overlay, new_game]
+        return [set_position, set_caption, show_move, show_piece_moves, show_attacks, show_attackers,
+                suggest_move, highlight, clear_overlay, new_game]
 
     def ui_state(self) -> dict[str, Any]:
         return {"board": self.chess.view()}
@@ -110,13 +125,14 @@ async def _apply(ctx: ToolContext, change) -> Any:
         result = change(coach.chess)
     except ChessError as exc:
         raise ToolError(str(exc)) from exc
+    coach.chess.save_lesson_start()  # drawings made before the first move come back on "Restart"
     await coach.publish_board(ctx)
     return result
 
 
 @tool(exclusive=True)
 async def set_position(fen: str = "start", caption: str = "", user_moves_next: bool = False,
-                       ctx: ToolContext = None) -> str:
+                       black_reply: Literal["auto", "pass"] = "auto", ctx: ToolContext = None) -> str:
     """Show a position on the board (clears arrows, dots and highlights).
 
     Args:
@@ -124,11 +140,48 @@ async def set_position(fen: str = "start", caption: str = "", user_moves_next: b
             plus side to move for a lesson (kings may be left out), e.g. "8/8/8/3N4/8/8/8/8 w".
         caption: One short line shown under the board, e.g. "The knight jumps in an L-shape".
         user_moves_next: True unlocks the board so the user can try a move. White must be to move.
+        black_reply: "auto" (default): Black answers each user move automatically. "pass": Black
+            never moves, so the user can keep moving White (drills such as touring a piece).
     """
-    await _apply(ctx, lambda chess: chess.set_position(fen, caption, user_moves_next))
+    await _apply(ctx, lambda chess: chess.set_position(fen, caption, user_moves_next, black_reply))
     board = _coach(ctx).chess
     unlocked = "The user can move now." if board.view()["interactive"] else "The board is locked."
     return f"Position shown ({board.board.fen()}). {unlocked}"
+
+
+@tool
+async def set_caption(caption: str, ctx: ToolContext = None) -> str:
+    """Change the instruction line beside the board, e.g. "Now capture the black pawn".
+
+    Args:
+        caption: One short instruction or hint, in everyday words.
+    """
+
+    def change(chess):
+        chess.caption = caption
+        return "Caption updated."
+
+    return await _apply(ctx, change)
+
+
+@tool
+async def suggest_move(caption: str | None = None, ctx: ToolContext = None) -> str:
+    """Find a sensible move for the side to move (a short 2-move look-ahead that counts
+    material: it grabs free pieces, avoids losing them, and finds mate in one) and draw it as a
+    blue hint arrow. Not a strong engine: present it as "a good idea", not "the best move".
+
+    Args:
+        caption: Optional line beside the board; omit to keep the current one.
+    """
+
+    def change(chess):
+        move, words = chess.suggest()
+        chess.add_arrow(move, "hint")
+        if caption is not None:
+            chess.caption = caption
+        return f"Suggested {chess.board.san(move)}: {words}"
+
+    return await _apply(ctx, change)
 
 
 @tool

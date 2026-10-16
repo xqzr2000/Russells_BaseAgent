@@ -146,6 +146,19 @@ M1 notes:
 - [ ] `demonstrate` and `ask_user_move`
 - [ ] Placement, plus the level 0 and 1 skills
 
+**Beginner experience, step 1** (done 2026-10-16, after first-hand feedback: confusing for someone who has never played)
+- [x] Black answers every move automatically, in lessons too (`black_reply="auto"`); if Black has nothing to move it's White's turn again; `"pass"` for drills
+- [x] The board never freezes after a lesson move; the coach's instruction stays until it gives the next one
+- [x] Plain-English narration of the last moves ("You moved your knight from g1 to f3. Black moved its pawn from e7 to e5."); move messages to the coach use the same words
+- [x] Dots on pick-up, click-to-move, and instant feedback for impossible moves (no server call)
+- [x] Helper buttons: Hint (`suggest_move`, a 2-ply look-ahead drawn as a blue arrow), Why did Black do that?, I'm confused
+- [x] Rewind: Step back and Restart lesson (lessons), Undo (games); `POST .../chess/rewind`
+- [x] Coach prompt rewritten for absolute beginners: one instruction per message, mirrored in the caption
+
+**Beginner experience, step 2 and 3** (next, see the chat's proposal)
+- [ ] Structured beginner course as lesson data with mini-games (collect the stars, capture the pawns), progress bar
+- [ ] Guided games: instant non-LLM warnings (hanging pieces), coach speaks at key moments, a gentler "first game" bot
+
 **M3 Stockfish and play**
 - [ ] Engine wrapper and devcontainer install
 - [ ] `new_game` with Elo levels and the CMU bot below about 1320

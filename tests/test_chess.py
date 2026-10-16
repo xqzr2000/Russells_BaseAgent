@@ -39,14 +39,78 @@ def test_lesson_position_without_kings_shows_knight_moves():
     assert {"square": "d5", "color": "yellow"} in view["highlights"]
 
 
-def test_lesson_move_locks_board_and_asks_coach():
+def test_lesson_move_keeps_the_board_playable_and_asks_coach():
     board = ChessSession()
     board.set_position("8/8/8/3N4/8/8/8/8 w", user_moves_next=True)
     outcome = board.user_move("d5f6")
-    assert outcome.needs_coach and outcome.message() == "I played Nf6."
-    assert not board.view()["interactive"] and board.view()["last_move"] == "d5f6"
+    assert outcome.needs_coach and outcome.message() == "I moved my knight from d5 to f6 (Nf6)."
+    # Black has nothing to move, so it is White's turn again rather than a frozen board.
+    view = board.view()
+    assert view["interactive"] and view["turn"] == "white" and view["last_move"] == "d5f6"
+    assert "your turn again" in view["narration"] and view["history"] == ["Nf6"]
+    board.user_move("f6g8")
+    board.user_can_move = False  # the coach can still lock the board
     with pytest.raises(ChessError, match="locked"):
-        board.user_move("f6g8")
+        board.user_move("g8f6")
+
+
+def test_black_answers_in_lessons_unless_told_to_pass():
+    board = ChessSession()
+    board.set_position("4k3/pppp4/8/8/8/8/8/R3K3 w", "Capture a pawn", user_moves_next=True)
+    outcome = board.user_move("a1a7")
+    assert outcome.reply_san and board.view()["turn"] == "white"
+    assert outcome.message().startswith("I captured Black's pawn on a7 with my rook (Rxa7). Black ")
+    assert board.narration.startswith("You captured Black's pawn on a7 with your rook. Black ")
+
+    board.set_position("4k3/pppp4/8/8/8/8/8/R3K3 w", user_moves_next=True, black_reply="pass")
+    outcome = board.user_move("a1a3")
+    assert outcome.reply_san is None and board.view()["turn"] == "white"
+    assert board.board.fen().startswith("4k3/pppp4/8/8/8/R7/8/4K3 w")
+
+
+def test_rewind_steps_back_and_restarts_the_lesson():
+    board = ChessSession()
+    board.set_position("4k3/pppp4/8/8/8/8/8/R3K3 w", "Capture a pawn", user_moves_next=True)
+    board.show_piece_moves("a1")
+    board.save_lesson_start()  # what the coach's tools do after drawing on a fresh lesson
+    board.user_move("a1a7")
+    board.user_move("a7b7") if board.board.piece_at(chess.B7) else board.user_move("a7a8")
+    assert len(board.history_san()) == 4 and board.view()["can_step_back"]
+    board.rewind("back")
+    assert len(board.history_san()) == 2 and board.view()["interactive"]
+    board.rewind("back")
+    # Back at the lesson start: the coach's dots and caption come back too.
+    assert board.history_san() == [] and board.view()["dots"] and board.caption == "Capture a pawn"
+    with pytest.raises(ChessError, match="no move to take back"):
+        board.rewind("back")
+    board.user_move("a1a2")
+    board.rewind("start")
+    view = board.view()
+    assert view["history"] == [] and not view["can_restart"] and view["dots"]
+    board.new_game()
+    with pytest.raises(ChessError, match="only works in a lesson"):
+        board.rewind("start")
+    board.user_move("e2e4")
+    board.rewind("back")
+    assert board.board.fen() == chess.STARTING_FEN and board.view()["interactive"]
+
+
+def test_plain_words_for_special_moves():
+    from baseagent.chess.game import describe_move
+
+    castle = chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1")
+    assert describe_move(castle, chess.Move.from_uci("e1g1"), "you").startswith("You castled kingside")
+    promo = chess.Board("8/4P3/8/8/8/8/8/k6K w - - 0 1")
+    assert "became a knight" in describe_move(promo, chess.Move.from_uci("e7e8n"), "you")
+    mate = chess.Board("6k1/8/8/8/8/8/r5PP/7K b - - 0 1")
+    assert describe_move(mate, chess.Move.from_uci("a2a1"), "Black").endswith("(checkmate!).")
+
+
+def test_suggest_move_is_legal_and_described():
+    board = ChessSession()
+    board.set_position("r3k3/8/8/8/8/8/8/Q3K3 w - - 0 1", user_moves_next=True)
+    move, words = board.suggest()
+    assert move.uci() == "a1a8" and words == "Capture Black's rook on a8 with your queen (check!)."
 
 
 def test_rejects_bad_positions_and_moves():
@@ -143,10 +207,16 @@ def test_coach_tools_publish_board_events_and_detail(tmp_path):
         assert detail["board"]["interactive"] and len(detail["board"]["dots"]) == 8
 
         moved = client.post(f"/api/sessions/{session['id']}/chess/move", json={"move": "d5e7"}).json()
-        assert moved["needs_coach"] and moved["message"] == "I played Ne7."
-        assert moved["board"]["last_move"] == "d5e7" and not moved["board"]["interactive"]
-        again = client.post(f"/api/sessions/{session['id']}/chess/move", json={"move": "e7g8"})
-        assert again.status_code == 422 and "locked" in again.json()["detail"]
+        assert moved["needs_coach"] and moved["message"] == "I moved my knight from d5 to e7 (Ne7)."
+        assert moved["board"]["last_move"] == "d5e7" and moved["board"]["interactive"]
+        bad = client.post(f"/api/sessions/{session['id']}/chess/move", json={"move": "e7e8"})
+        assert bad.status_code == 422 and "not a legal move" in bad.json()["detail"]
+
+        back = client.post(f"/api/sessions/{session['id']}/chess/rewind", json={"to": "back"}).json()
+        assert back["board"]["fen"].startswith("8/8/8/3N4/8/8/8/8 w") and not back["needs_coach"]
+        assert back["board"]["dots"]  # back at the start, the lesson's drawings return
+        again = client.post(f"/api/sessions/{session['id']}/chess/rewind", json={"to": "start"}).json()
+        assert again["board"]["history"] == []
 
 
 def test_game_moves_get_bot_replies_without_the_model(tmp_path):

@@ -281,12 +281,20 @@ class FakeLLM:
         """An offline walk-through of the chess coach's board tools."""
         text = user_text.lower()
         if results:
-            if results[-1].get("tool_call_id", "").startswith("call_new_game"):
+            last = results[-1]
+            if last.get("tool_call_id", "").startswith("call_new_game"):
                 return "(fake model) New game! You're White: drag a piece to make your first move."
+            if last.get("tool_call_id", "").startswith("call_suggest_move"):
+                return f"(fake model) Here's an idea, shown by the blue arrow. {last['content']}"
             return ("(fake model) This is a knight. The dots show every square it can jump to: "
                     "two squares one way, then one to the side. Try it: move the knight.")
-        if text.startswith("i played"):
+        if re.match(r"i (moved|captured|castled)", text):
             return f"(fake model) {user_text.strip()} Pick a real model in Settings for real coaching."
+        if "hint" in text:
+            return cls._call("suggest_move", {})
+        if "confused" in text:
+            return ("(fake model) No problem! The offline model can only show two demos. Pick a "
+                    "real model in Settings and the coach will explain the board step by step.")
         lesson = any(word in text for word in ("teach", "learn", "knight", "how"))
         if not lesson and ("play" in text or "game" in text):
             return cls._call("new_game", {})

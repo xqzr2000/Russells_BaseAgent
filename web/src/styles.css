@@ -161,7 +161,7 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 .small-btn { align-self: flex-start; padding: 5px 12px; font-size: 13px; }
 .handoff-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; color: var(--ink-3); font-size: 13px; font-weight: 600; }
 .handoff-divider::before, .handoff-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.chess-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; max-height: var(--board); }
+.chess-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; max-height: var(--board); overflow-y: auto; }
 .chess-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .chess-mode {
   font-size: 12px; font-weight: 600; letter-spacing: 0.02em; padding: 3px 9px; border-radius: 999px;
@@ -171,6 +171,16 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 .icon-btn.subtle-visible { color: var(--ink-3); }
 .chess-caption { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; color: var(--ink); }
 .chess-status { margin: 0; font-size: 13px; color: var(--ink-3); }
+.chess-narration { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.chess-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn {
+  padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--agent-soft); background: var(--agent-soft); color: var(--agent);
+}
+.chip-btn:hover:not(:disabled) { border-color: var(--agent); }
+.chip-btn.plain { background: var(--surface); border-color: var(--line); color: var(--ink-2); }
+.chip-btn.plain:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+.chip-btn:disabled { opacity: 0.5; cursor: default; }
 .chess-status.your-move { color: var(--ok); font-weight: 600; }
 .chess-notice { margin: 0; font-size: 13px; color: var(--danger); background: var(--danger-soft); padding: 6px 9px; border-radius: var(--radius-sm); }
 .chess-moves {
@@ -432,6 +442,8 @@ pre.code {
   .chess-side { width: var(--board); max-height: none; gap: 4px; }
   .chess-moves, .chess-legend { display: none; }
   .chess-caption { font-size: 14px; }
+  .chess-narration { font-size: 13px; }
+  .chip-btn { padding: 4px 9px; font-size: 12px; }
   .composer-wrap { padding: 10px 0 14px; }
   .composer-hint { display: none; }
 }

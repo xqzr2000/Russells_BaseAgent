@@ -10,6 +10,7 @@ import type { BoardState } from "../types";
 type Position = Record<string, { pieceType: string }>;
 
 const FILES = "abcdefgh";
+const PIECE_NAMES: Record<string, string> = { P: "pawn", N: "knight", B: "bishop", R: "rook", Q: "queen", K: "king" };
 
 const ARROW_COLORS: Record<string, string> = {
   green: "rgba(38, 134, 74, 0.82)",
@@ -67,16 +68,27 @@ const PROMOTIONS = [
 
 interface Props {
   board: BoardState;
-  busy: boolean; // the coach is mid-turn, so the board is locked
+  busy: boolean; // the coach is mid-turn or a move is on its way, so the board is locked
   /** Send the move (UCI, e.g. "e7e8n") to the server; resolves to false if it was rejected. */
   onMove: (uci: string) => Promise<boolean>;
   onClaimDraw: () => void;
+  onRewind: (to: "back" | "start") => void;
+  /** Send the coach a chat message (the Hint / Why / I'm confused buttons). */
+  onAsk: (message: string) => void;
   notice: string | null; // a short message, e.g. why a move was rejected
 }
 
-export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) {
+const ASK = {
+  hint: "Hint, please: what could I do next?",
+  why: "Why did Black make that last move?",
+  confused: "I'm confused. Please explain what's happening on the board in simple words, and tell me exactly what to do next.",
+};
+
+export function ChessPanel({ board, busy, onMove, onClaimDraw, onRewind, onAsk, notice }: Props) {
   const [pending, setPending] = useState<{ from: string; to: string } | null>(null);
   const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null); // a white piece picked up or clicked
+  const [tip, setTip] = useState<string | null>(null); // instant feedback, e.g. an impossible move
   const [collapsed, setCollapsed] = useState(false);
   const reduceMotion = useMemo(
     () => typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
@@ -87,14 +99,15 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) 
   useEffect(() => {
     setPending(null);
     setPromotion(null);
+    setSelected(null);
+    setTip(null);
   }, [board]);
 
-  const submit = (from: string, to: string, piece = "") => {
-    setPending({ from, to });
-    onMove(from + to + piece).then((ok) => {
-      if (!ok) setPending(null); // rejected: the piece goes back
-    });
-  };
+  useEffect(() => {
+    if (!tip) return;
+    const timer = window.setTimeout(() => setTip(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [tip]);
 
   const position = useMemo(() => {
     const placed = fenToPosition(board.fen);
@@ -104,6 +117,42 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) 
     }
     return placed;
   }, [board.fen, pending]);
+
+  const canMove = board.interactive && !busy && !pending && !promotion;
+  /** Squares the piece on `square` may move to, from the server's list of legal moves. */
+  const targetsOf = (square: string) =>
+    [...new Set(board.legal_moves.filter((m) => m.startsWith(square)).map((m) => m.slice(2, 4)))];
+  const selectedTargets = selected ? targetsOf(selected) : [];
+
+  const submit = (from: string, to: string, piece = "") => {
+    setSelected(null);
+    setPending({ from, to });
+    onMove(from + to + piece).then((ok) => {
+      if (!ok) setPending(null); // rejected: the piece goes back
+    });
+  };
+
+  /** Move a piece if the rules allow it; otherwise explain at once, without asking the server. */
+  const tryMove = (from: string, to: string): boolean => {
+    if (!canMove || from === to) return false;
+    const piece = position[from]?.pieceType ?? "";
+    if (!targetsOf(from).includes(to)) {
+      setSelected(from);
+      setTip(
+        targetsOf(from).length
+          ? `Your ${PIECE_NAMES[piece[1]] ?? "piece"} can't go to ${to}. The dots show where it can go.`
+          : `Your ${PIECE_NAMES[piece[1]] ?? "piece"} has no moves right now. Try another piece.`,
+      );
+      return false;
+    }
+    if (piece === "wP" && to.endsWith("8")) {
+      setSelected(null);
+      setPromotion({ from, to }); // ask which piece the pawn becomes
+      return false;
+    }
+    submit(from, to);
+    return true;
+  };
 
   const squareStyles = useMemo(() => {
     const styles: Record<string, CSSProperties> = {};
@@ -116,25 +165,29 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) 
       add(last.slice(2, 4), { backgroundColor: LAST_MOVE });
     }
     for (const h of board.highlights) add(h.square, { backgroundColor: HIGHLIGHT_COLORS[h.color] });
-    for (const square of board.dots) add(square, { backgroundImage: position[square] ? RING : DOT });
+    // A picked-up piece shows its own moves; otherwise the coach's dots are drawn.
+    const dots = selected ? selectedTargets : board.dots;
+    if (selected) add(selected, { backgroundColor: HIGHLIGHT_COLORS.yellow });
+    for (const square of dots) add(square, { backgroundImage: position[square] ? RING : DOT });
     if (board.in_check && !pending) {
       const king = board.turn === "white" ? "wK" : "bK";
       const square = Object.keys(position).find((s) => position[s].pieceType === king);
       if (square) add(square, { backgroundImage: CHECK });
     }
     return styles;
-  }, [board, pending, position]);
+  }, [board, pending, position, selected]);
 
-  const canMove = board.interactive && !busy && !pending && !promotion;
   const status = (() => {
-    if (busy) return "The coach is thinking...";
     if (pending) return "Checking your move...";
+    if (busy) return "The coach is thinking...";
     if (board.game_over) return "Game over";
     if (promotion) return "Choose a piece for your pawn";
-    if (canMove) return "Your move: drag a white piece";
+    if (canMove) return selected ? "Now click a square with a dot" : "Your move: drag a white piece, or click it";
     return board.mode === "game" ? "Waiting..." : "Watch the board";
   })();
   const pairs = movePairs(board.history);
+  const blackMoved = /\bBlack (moved|captured|castled)\b/.test(board.narration);
+  const locked = busy || !!pending;
 
   return (
     <section className={`chess-panel ${collapsed ? "collapsed" : ""}`} aria-label="Chess board">
@@ -166,21 +219,32 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) 
                 boardStyle: { borderRadius: "10px", overflow: "hidden", boxShadow: "0 4px 14px rgba(28, 52, 12, 0.18)" },
                 dropSquareStyle: { boxShadow: "inset 0 0 0 3px rgba(59, 63, 158, 0.55)" },
                 canDragPiece: ({ piece }) => canMove && piece.pieceType.startsWith("w"),
-                onPieceDrop: ({ piece, sourceSquare, targetSquare }) => {
-                  if (!canMove || !targetSquare || targetSquare === sourceSquare) return false;
-                  // A white pawn reaching the last rank: ask which piece it becomes.
-                  if (piece.pieceType === "wP" && targetSquare.endsWith("8")) {
-                    setPromotion({ from: sourceSquare, to: targetSquare });
+                onPieceDrag: ({ square }) => {
+                  if (canMove && square) setSelected(square);
+                },
+                onPieceDrop: ({ sourceSquare, targetSquare }) => {
+                  if (!targetSquare || targetSquare === sourceSquare) {
+                    setSelected(sourceSquare); // dropped back: keep showing its moves
                     return false;
                   }
-                  submit(sourceSquare, targetSquare);
-                  return true;
+                  return tryMove(sourceSquare, targetSquare);
+                },
+                // Click a white piece to see its moves, then click a dot to move there.
+                onSquareClick: ({ piece, square }) => {
+                  if (!canMove) return;
+                  if (selected && selectedTargets.includes(square)) {
+                    tryMove(selected, square);
+                  } else if (piece?.pieceType.startsWith("w")) {
+                    setSelected(selected === square ? null : square);
+                  } else if (selected) {
+                    tryMove(selected, square);
+                  }
                 },
               }}
             />
             {promotion && (
               <div className="promotion" role="dialog" aria-label="Promote the pawn to">
-                <span className="promotion-title">Promote to</span>
+                <span className="promotion-title">Your pawn reached the end! It becomes a...</span>
                 <div className="promotion-choices">
                   {PROMOTIONS.map((p) => (
                     <button
@@ -214,18 +278,46 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, notice }: Props) 
               </button>
             </div>
             {board.caption && <p className="chess-caption">{board.caption}</p>}
+            {board.narration && <p className="chess-narration">{board.narration}</p>}
             <p className={`chess-status ${canMove ? "your-move" : ""}`} aria-live="polite">
               {status}
             </p>
-            {notice && (
+            {(tip || notice) && (
               <p className="chess-notice" role="alert">
-                {notice}
+                {tip ?? notice}
               </p>
             )}
-            {board.draw_claimable && !busy && (
-              <button className="btn ghost small-btn" onClick={onClaimDraw}>
-                Claim draw
+            <div className="chess-actions">
+              <button className="chip-btn" onClick={() => onAsk(ASK.hint)} disabled={locked || board.game_over}>
+                💡 Hint
               </button>
+              {blackMoved && (
+                <button className="chip-btn" onClick={() => onAsk(ASK.why)} disabled={locked}>
+                  Why did Black do that?
+                </button>
+              )}
+              <button className="chip-btn" onClick={() => onAsk(ASK.confused)} disabled={locked}>
+                I'm confused
+              </button>
+            </div>
+            {(board.can_step_back || board.can_restart || board.draw_claimable) && (
+              <div className="chess-actions">
+                {board.can_step_back && (
+                  <button className="chip-btn plain" onClick={() => onRewind("back")} disabled={locked} title="Take back your last move">
+                    ↶ {board.mode === "game" ? "Undo" : "Step back"}
+                  </button>
+                )}
+                {board.can_restart && (
+                  <button className="chip-btn plain" onClick={() => onRewind("start")} disabled={locked} title="Back to the start of this lesson">
+                    ⟲ Restart lesson
+                  </button>
+                )}
+                {board.draw_claimable && (
+                  <button className="chip-btn plain" onClick={onClaimDraw} disabled={locked}>
+                    Claim draw
+                  </button>
+                )}
+              </div>
             )}
             {pairs.length > 0 && (
               <ol className="chess-moves" aria-label="Moves">
