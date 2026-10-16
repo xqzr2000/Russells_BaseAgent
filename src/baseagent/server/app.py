@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -321,6 +321,14 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             if path and file.is_file() and WEB_DIST in file.resolve().parents:
                 return FileResponse(file)
             return FileResponse(WEB_DIST / "index.html")
+    else:
+        @app.get("/", include_in_schema=False)
+        async def no_ui():
+            # In `make dev` the chat room is served by Vite on 5173; this port is only the API.
+            return HTMLResponse(
+                "<p>This is the agent API (port 8000). In <code>make dev</code> the chat room runs "
+                "on <b>port 5173</b>: open that port instead. To serve the chat room from this "
+                "port, run <code>make serve</code>.</p>")
 
     return app
 
