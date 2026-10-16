@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AgentInfo,
   AgentSettings,
+  ChessMoveResult,
   ServerConfig,
   SessionDetail,
   SessionSummary,
@@ -39,6 +40,9 @@ export const api = {
     json<AgentSettings>(`/api/sessions/${id}/settings`, { method: "PATCH", body: JSON.stringify(changes) }),
   deleteSession: (id: string) => json<{ ok: boolean }>(`/api/sessions/${id}`, { method: "DELETE" }),
   stop: (id: string) => json<{ stopped: boolean }>(`/api/sessions/${id}/stop`, { method: "POST" }),
+  /** The user moved a piece on the chess board (UCI, e.g. "e2e4"). */
+  chessMove: (id: string, move: string) =>
+    json<ChessMoveResult>(`/api/sessions/${id}/chess/move`, { method: "POST", body: JSON.stringify({ move }) }),
   /** Upload a file into the chat's workspace (data/<name>); the raw file is the body. */
   uploadFile: (id: string, file: File) =>
     json<UploadedFile>(`/api/sessions/${id}/files/${encodeURIComponent(file.name)}`, {

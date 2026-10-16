@@ -15,6 +15,7 @@ Override these (all optional):
     is_final(message)            when a turn is finished
     format_observation(result)   how a tool result is shown to the model
     output_files()               files it produced for the user to download
+    ui_state()                   live state the UI draws (e.g. a chess board)
 
 Rule for subclasses: ``__init__`` only stores options. Anything that needs
 I/O or depends on subclass state belongs in ``setup()``, which the loop awaits
@@ -140,6 +141,13 @@ class BaseAgent:
     def output_files(self) -> list[Attachment]:
         """Files this agent has produced for the user (shown as downloads after a delegation)."""
         return []
+
+    def ui_state(self) -> dict[str, Any]:
+        """Extra live state the chat room draws besides messages (e.g. ``{"board": ...}``).
+
+        Included in the session detail so a reopened chat shows it again.
+        """
+        return {}
 
     # ------------------------------------------------------------- lifecycle
 

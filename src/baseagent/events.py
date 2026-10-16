@@ -114,6 +114,13 @@ class Compaction(_Event):
     summary: str
 
 
+class Board(_Event):
+    """The chess board changed (position, arrows, dots...). ``board`` is ``ChessSession.view()``."""
+
+    type: Literal["board"] = "board"
+    board: dict[str, Any]
+
+
 class Warning(_Event):  # noqa: A001 - mirrors the event name used in the UI
     type: Literal["warning"] = "warning"
     message: str
@@ -142,6 +149,7 @@ AgentEvent = Annotated[
     | ToolEnd
     | UsageEvent
     | Compaction
+    | Board
     | Warning
     | Error
     | TurnEnd,

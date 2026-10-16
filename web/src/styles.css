@@ -120,18 +120,58 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
 .session-item:hover .icon-btn.subtle, .icon-btn.subtle:focus-visible { opacity: 1; }
 
 /* ---------- conversation ---------- */
-.conversation {
-  overflow-y: auto; min-height: 0; padding: 26px 0 8px;
+/* The frosted dialog panel: an optional chess board on top, the scrolling messages below. */
+.dialog {
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   width: min(780px, calc(100% - 32px)); margin: 14px auto 0;
   background: var(--glass); border: 1px solid var(--glass-edge); border-radius: 20px;
   backdrop-filter: blur(18px) saturate(1.25); -webkit-backdrop-filter: blur(18px) saturate(1.25);
   box-shadow: var(--float-shadow);
   transition: opacity 0.7s ease, transform 0.7s ease;
 }
+.conversation { flex: 1; overflow-y: auto; min-height: 0; padding: 26px 0 8px; }
+.dialog.has-board .conversation { padding-top: 14px; }
 .conversation .column { max-width: none; }
 .empty { padding: 5vh 0 24px; }
+.dialog.has-board .empty { padding-top: 8px; }
 /* during the intro video only the composer shows, so Jack's run isn't covered */
-.main.intro .conversation { opacity: 0; transform: translateY(14px); pointer-events: none; }
+.main.intro .dialog { opacity: 0; transform: translateY(14px); pointer-events: none; }
+
+/* ---------- chess board (chess coach) ---------- */
+.chess-panel {
+  --board: clamp(208px, 40vh, 380px);
+  display: flex; gap: 18px; align-items: stretch; flex: none;
+  padding: 16px 20px 14px; border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+.chess-board { width: var(--board); flex: none; }
+.chess-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; max-height: var(--board); }
+.chess-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chess-mode {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em; padding: 3px 9px; border-radius: 999px;
+  background: var(--agent-soft); color: var(--agent);
+}
+.chess-mode.game { background: #e2efd6; color: #2f6a2c; }
+.icon-btn.subtle-visible { color: var(--ink-3); }
+.chess-caption { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; color: var(--ink); }
+.chess-status { margin: 0; font-size: 13px; color: var(--ink-3); }
+.chess-status.your-move { color: var(--ok); font-weight: 600; }
+.chess-notice { margin: 0; font-size: 13px; color: var(--danger); background: var(--danger-soft); padding: 6px 9px; border-radius: var(--radius-sm); }
+.chess-moves {
+  list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0;
+  font: 13px/1.6 var(--mono); color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 0 12px;
+}
+.chess-legend { margin: auto 0 0; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.swatch { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-left: 6px; }
+.swatch:first-child { margin-left: 0; }
+.swatch.green { background: rgba(38, 134, 74, 0.82); }
+.swatch.blue { background: rgba(59, 63, 158, 0.78); }
+.swatch.red { background: rgba(196, 44, 32, 0.82); }
+.chess-panel.collapsed { padding: 8px 14px; }
+.chess-show {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 6px 8px;
+  border: 0; background: none; cursor: pointer; font-weight: 600; color: var(--agent); text-align: left;
+}
 .empty h1 { font-size: 34px; line-height: 1.15; letter-spacing: -0.02em; margin: 0 0 8px; font-weight: 700; }
 .empty > p { color: var(--ink-2); margin: 0 0 20px; max-width: 60ch; }
 .examples { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
@@ -371,7 +411,11 @@ pre.code {
   .examples { grid-template-columns: 1fr; }
   .empty h1 { font-size: 28px; }
   .user-bubble { max-width: 92%; }
-  .conversation { width: calc(100% - 20px); margin-top: 10px; border-radius: 16px; }
+  .dialog { width: calc(100% - 20px); margin-top: 10px; border-radius: 16px; }
+  .chess-panel { --board: min(calc(100vw - 72px), 34vh); flex-direction: column; align-items: center; gap: 8px; padding: 12px 14px 10px; }
+  .chess-side { width: var(--board); max-height: none; gap: 4px; }
+  .chess-moves, .chess-legend { display: none; }
+  .chess-caption { font-size: 14px; }
   .composer-wrap { padding: 10px 0 14px; }
   .composer-hint { display: none; }
 }

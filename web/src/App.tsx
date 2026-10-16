@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
+import { ChessPanel } from "./components/ChessPanel";
 import { FileIcon, formatSize } from "./components/FileIcon";
 import { Meadow } from "./components/Meadow";
 import { SettingsDrawer } from "./components/SettingsDrawer";
@@ -10,6 +11,7 @@ import type {
   AgentEvent,
   AgentInfo,
   AgentSettings,
+  BoardState,
   ServerConfig,
   SessionDetail,
   SessionSummary,
@@ -52,6 +54,8 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [board, setBoard] = useState<BoardState | null>(null); // the chess coach's board, if any
+  const [chessNotice, setChessNotice] = useState<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [pendingSettings, setPendingSettings] = useState<Partial<AgentSettings>>(loadDefaults);
@@ -66,10 +70,11 @@ export default function App() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const stickToBottom = useRef(true);
   const [intro, setIntro] = useState(true);
-  const meadowAvoid = useMemo(() => [scroller, composerRef], []);
+  const meadowAvoid = useMemo(() => [dialogRef, composerRef], []);
   const endIntro = useCallback(() => setIntro(false), []);
   // Typing, attaching or dropping a file, or opening a chat cuts the intro short.
   const skipIntro = draft !== "" || attachments.length > 0 || uploading || dragging || session !== null;
@@ -122,6 +127,12 @@ export default function App() {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [events]);
 
+  useEffect(() => {
+    if (!chessNotice) return;
+    const timer = window.setTimeout(() => setChessNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [chessNotice]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
@@ -130,6 +141,8 @@ export default function App() {
   const newChat = (name = agentName) => {
     setSession(null);
     setEvents([]);
+    setBoard(null);
+    setChessNotice(null);
     setAgentName(name);
     setAttachments([]);
     setError(null);
@@ -142,6 +155,8 @@ export default function App() {
       const detail = await api.session(id);
       setSession(detail);
       setEvents(detail.events);
+      setBoard(detail.board ?? null);
+      setChessNotice(null);
       setAgentName(detail.agent);
       setAttachments([]);
       setError(null);
@@ -164,6 +179,7 @@ export default function App() {
     if (!agent) throw new Error("No agent is available.");
     const created = await api.createSession(agent.name, { ...pendingSettings });
     setSession(created);
+    setBoard(created.board ?? null);
     return created;
   };
 
@@ -197,10 +213,14 @@ export default function App() {
     try {
       const current = await ensureSession();
       const id = current.id;
-      await streamTurn(id, content, pending.map((a) => a.path), (event) => setEvents((prev) => [...prev, event]));
+      await streamTurn(id, content, pending.map((a) => a.path), (event) => {
+        setEvents((prev) => [...prev, event]);
+        if (event.type === "board") setBoard(event.board);
+      });
       const detail = await api.session(id);
       setSession(detail);
       setEvents(detail.events);
+      setBoard(detail.board ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setDraft((d) => d || content);
@@ -208,6 +228,25 @@ export default function App() {
     } finally {
       setBusy(false);
       refreshSessions();
+    }
+  };
+
+  /** The user dragged a piece. Lesson moves (and the end of a game) are reported to the coach. */
+  const chessMove = async (from: string, to: string): Promise<boolean> => {
+    if (!session || busy) return false;
+    setChessNotice(null);
+    try {
+      const before = board?.history.length ?? 0;
+      const result = await api.chessMove(session.id, from + to);
+      // Let the user's own move settle before the bot's reply animates in.
+      if (result.board.history.length > before + 1) await new Promise((r) => setTimeout(r, 380));
+      setBoard(result.board);
+      refreshSessions();
+      if (result.needs_coach) send(result.message);
+      return true;
+    } catch (e) {
+      setChessNotice(e instanceof Error ? e.message : String(e));
+      return false;
     }
   };
 
@@ -330,32 +369,35 @@ export default function App() {
           </button>
         </header>
 
-        <div className="conversation" ref={scroller} onScroll={onScroll}>
-          <div className="column">
-            {turns.length === 0 && agent && (
-              <section className="empty">
-                <h1>{agent.title}</h1>
-                <p>{agent.description}</p>
-                {keyMissing && (
-                  <p className="note note-warning">
-                    No OpenAI key found, so chats use the offline <code>{config?.fake_model}</code> model. Add{" "}
-                    <code>OPENAI_API_KEY</code> as a Codespaces secret and rebuild the container to use real models.
-                  </p>
-                )}
-                {agent.examples.length > 0 && (
-                  <div className="examples">
-                    {agent.examples.map((ex) => (
-                      <button key={ex} className="example" onClick={() => send(ex)} disabled={busy}>
-                        {ex}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </section>
-            )}
-            {turns.map((turn, i) => (
-              <TurnView key={turn.index} turn={turn} live={busy && i === turns.length - 1} />
-            ))}
+        <div className={`dialog ${board ? "has-board" : ""}`} ref={dialogRef}>
+          {board && <ChessPanel board={board} busy={busy} onMove={chessMove} notice={chessNotice} />}
+          <div className="conversation" ref={scroller} onScroll={onScroll}>
+            <div className="column">
+              {turns.length === 0 && agent && (
+                <section className="empty">
+                  <h1>{agent.title}</h1>
+                  <p>{agent.description}</p>
+                  {keyMissing && (
+                    <p className="note note-warning">
+                      No OpenAI key found, so chats use the offline <code>{config?.fake_model}</code> model. Add{" "}
+                      <code>OPENAI_API_KEY</code> as a Codespaces secret and rebuild the container to use real models.
+                    </p>
+                  )}
+                  {agent.examples.length > 0 && (
+                    <div className="examples">
+                      {agent.examples.map((ex) => (
+                        <button key={ex} className="example" onClick={() => send(ex)} disabled={busy}>
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+              {turns.map((turn, i) => (
+                <TurnView key={turn.index} turn={turn} live={busy && i === turns.length - 1} />
+              ))}
+            </div>
           </div>
         </div>
 

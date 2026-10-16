@@ -46,7 +46,8 @@ class Session:
 
     def detail(self) -> dict[str, Any]:
         return {**self.summary(), "settings": self.agent.settings.model_dump(),
-                "events": self.agent.transcript, "usage": self.agent.total_usage.model_dump()}
+                "events": self.agent.transcript, "usage": self.agent.total_usage.model_dump(),
+                **self.agent.ui_state()}
 
 
 class SessionManager:

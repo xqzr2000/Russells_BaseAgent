@@ -16,6 +16,29 @@ export interface Attachment {
   url: string | null;
 }
 
+/** The chess coach's board (ChessSession.view() in src/baseagent/chess/game.py). */
+export interface BoardState {
+  fen: string;
+  mode: "lesson" | "game";
+  turn: "white" | "black";
+  interactive: boolean; // the user (White) may drag a piece now
+  last_move: string | null; // UCI, e.g. "e2e4"
+  in_check: boolean;
+  game_over: boolean;
+  caption: string;
+  arrows: { from: string; to: string; color: "green" | "blue" | "red" }[];
+  highlights: { square: string; color: "yellow" | "green" | "red" | "blue" }[];
+  dots: string[];
+  history: string[]; // SAN moves from the position the coach set up
+}
+
+export interface ChessMoveResult {
+  board: BoardState;
+  needs_coach: boolean; // report the move to the coach as a chat message
+  message: string; // e.g. "I played Nf3."
+  game_over: boolean;
+}
+
 export interface ToolCallInfo {
   id: string;
   name: string;
@@ -43,6 +66,7 @@ export type AgentEvent =
     })
   | (Base & { type: "usage"; step: number; usage: Usage })
   | (Base & { type: "compaction"; tokens_before: number; tokens_after: number; summary: string })
+  | (Base & { type: "board"; board: BoardState })
   | (Base & { type: "warning"; message: string })
   | (Base & { type: "error"; message: string })
   | (Base & {
@@ -86,6 +110,7 @@ export interface SessionDetail extends SessionSummary {
   settings: AgentSettings;
   events: AgentEvent[];
   usage: Usage;
+  board?: BoardState; // only for agents with a chess board
 }
 
 export interface ServerConfig {

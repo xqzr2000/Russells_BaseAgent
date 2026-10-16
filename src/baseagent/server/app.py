@@ -7,6 +7,7 @@
     POST /api/sessions/{id}/stop       cancel the running turn
     PUT  /api/sessions/{id}/files/{name}   upload a data file (raw body) to data/
     GET  /api/sessions/{id}/files/{path}   download a file from the chat's workspace
+    POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
     GET  /api/agents | /api/models | /api/config
 
 In production (``make serve``) it also serves the built web UI from web/dist.
@@ -32,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
+from baseagent.chess import ChessError, ChessSession
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
@@ -55,6 +57,10 @@ SUGGESTED_MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1", "gpt-4.1-min
 class CreateSession(BaseModel):
     agent: str = DEFAULT_AGENT
     settings: dict[str, Any] | None = None
+
+
+class ChessMove(BaseModel):
+    move: str  # UCI from the board (e2e4), SAN also accepted
 
 
 class SendMessage(BaseModel):
@@ -236,6 +242,25 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         if not file.is_file() or any(part.startswith(".") for part in Path(path).parts):
             raise HTTPException(404, "File not found.")
         return FileResponse(file, filename=file.name)  # Content-Disposition: attachment
+
+    @app.post("/api/sessions/{session_id}/chess/move")
+    async def chess_move(session_id: str, body: ChessMove):
+        """Play the user's move on the chat's board. In a game the bot answers at once
+        (no model call); ``needs_coach`` says whether the UI should report the move to the
+        coach as a chat message (lesson moves, the end of a game)."""
+        session = session_or_404(session_id)
+        board = getattr(session.agent, "chess", None)
+        if not isinstance(board, ChessSession):
+            raise HTTPException(404, "This chat has no chess board.")
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Move once it has finished.")
+        try:
+            outcome = board.user_move(body.move)
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": outcome.needs_coach,
+                "message": outcome.message(), "game_over": outcome.game_over}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessage):

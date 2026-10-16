@@ -2,7 +2,7 @@
 
 Repo: github.com/xqzr2000/Russells_BaseAgent, branch `chess-coach` (from `main`, which already has the meadow UI).
 Source: the chess agent in github.com/xqzr2000/cmu-11-768-assignment-1.
-Status: 2026-10-15 — plan agreed, nothing built yet.
+Status: 2026-10-15 — M1 (board plumbing) built: pick **Chess coach** in the agent picker. The handoff from the coordinator comes in M2.
 
 ## Goal
 
@@ -128,11 +128,18 @@ The coach moves the user up or down within a chat based on how the exercises go.
 
 ## Build order
 
-**M1 Board plumbing**
-- [ ] `ChessSession` and the `board` event
-- [ ] `ChessPanel` at the top of the panel
-- [ ] The move endpoint
-- [ ] A stub coach that sets positions, draws arrows and dots
+**M1 Board plumbing** (done)
+- [x] `ChessSession` and the `board` event
+- [x] `ChessPanel` at the top of the panel
+- [x] The move endpoint
+- [x] A first coach that sets positions, draws arrows and dots
+- [x] Early extra: full games against the very easy bot (`chess/bot.py`, written from scratch in the style of the CMU bot), so the board can be played on before Stockfish arrives
+
+M1 notes:
+- `BaseAgent.ui_state()` is a new hook: the session detail includes what it returns, so a reopened chat shows its board.
+- The coach reads the live position in its system prompt on every step, so it sees moves made on the board between turns.
+- The UI does not use `chess.js`: a drag is drawn at once and replaced by the server's position.
+- The offline `fake-echo` model walks through a knight lesson ("teach me chess") and a game ("let's play").
 
 **M2 Handoff and level 0 to 1 lessons**
 - [ ] `handoff` / `handoff_back` and the `handoff` event
