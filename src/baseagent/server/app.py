@@ -114,6 +114,12 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    def chess_board_of(session: Session) -> ChessSession:
+        board = getattr(session.current, "chess", None)
+        if not isinstance(board, ChessSession):
+            raise HTTPException(404, "This chat has no chess board.")
+        return board
+
     def workspace_of(session: Session) -> Workspace:
         if session.workspace is None:
             raise HTTPException(404, "This chat has no file workspace.")
@@ -249,9 +255,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         (no model call); ``needs_coach`` says whether the UI should report the move to the
         coach as a chat message (lesson moves, the end of a game)."""
         session = session_or_404(session_id)
-        board = getattr(session.agent, "chess", None)
-        if not isinstance(board, ChessSession):
-            raise HTTPException(404, "This chat has no chess board.")
+        board = chess_board_of(session)
         if session.busy:
             raise HTTPException(409, "The coach is still talking. Move once it has finished.")
         try:
@@ -261,6 +265,21 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         session.updated = time.time()
         return {"board": board.view(), "needs_coach": outcome.needs_coach,
                 "message": outcome.message(), "game_over": outcome.game_over}
+
+    @app.post("/api/sessions/{session_id}/chess/claim-draw")
+    async def chess_claim_draw(session_id: str):
+        """The user claims a draw (threefold repetition or the 50-move rule)."""
+        session = session_or_404(session_id)
+        board = chess_board_of(session)
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
+        try:
+            reason = board.claim_draw()
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": True,
+                "message": f"I claimed a draw ({reason}).", "game_over": True}
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessage):
@@ -286,8 +305,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         async def emit(event) -> None:
             await queue.put(event)
 
-        session.agent.emit_callback = emit
-        task = asyncio.create_task(session.agent.run(with_attachments(body.content, files)))
+        task = asyncio.create_task(session.run_message(with_attachments(body.content, files), emit))
         task.add_done_callback(lambda _: queue.put_nowait(None))
         session.task = task
         session.updated = time.time()

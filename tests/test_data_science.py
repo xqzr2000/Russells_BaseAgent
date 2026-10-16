@@ -148,7 +148,7 @@ async def test_coordinator_delegates_and_specialist_keeps_its_kernel(workspace):
 
     # Only the coordinator's own turns are in its transcript; the specialist's are separate.
     assert all(e.get("name") != "run_cell" for e in coordinator.transcript)
-    roster = llm.requests[0]["tools"][-1]["function"]
+    roster = next(t["function"] for t in llm.requests[0]["tools"] if t["function"]["name"] == "delegate")
     assert roster["name"] == "delegate" and "- data_science:" in roster["description"]
     assert "coordinator" not in roster["description"].split("Specialists:")[1]
 

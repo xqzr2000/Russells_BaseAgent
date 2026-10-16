@@ -12,6 +12,7 @@ import type {
   AgentInfo,
   AgentSettings,
   BoardState,
+  ChessMoveResult,
   ServerConfig,
   SessionDetail,
   SessionSummary,
@@ -56,6 +57,10 @@ export default function App() {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [board, setBoard] = useState<BoardState | null>(null); // the chess coach's board, if any
   const [chessNotice, setChessNotice] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false); // a board move is on its way to the server
+  const [activeAgent, setActiveAgent] = useState<{ name: string; title: string } | null>(null); // after a handoff
+  // The chat on screen. Late responses for another chat (after switching) are dropped.
+  const shownSession = useRef<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [pendingSettings, setPendingSettings] = useState<Partial<AgentSettings>>(loadDefaults);
@@ -138,10 +143,17 @@ export default function App() {
     if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
+  const showSession = (detail: SessionDetail | null) => {
+    shownSession.current = detail?.id ?? null;
+    setSession(detail);
+    setBoard(detail?.board ?? null);
+    setActiveAgent(detail?.active_agent ?? null);
+  };
+
   const newChat = (name = agentName) => {
-    setSession(null);
+    if (moving) return;
+    showSession(null);
     setEvents([]);
-    setBoard(null);
     setChessNotice(null);
     setAgentName(name);
     setAttachments([]);
@@ -150,12 +162,11 @@ export default function App() {
   };
 
   const openSession = async (id: string) => {
-    if (busy || uploading) return;
+    if (busy || uploading || moving) return;
     try {
       const detail = await api.session(id);
-      setSession(detail);
+      showSession(detail);
       setEvents(detail.events);
-      setBoard(detail.board ?? null);
       setChessNotice(null);
       setAgentName(detail.agent);
       setAttachments([]);
@@ -178,8 +189,7 @@ export default function App() {
     if (session) return session;
     if (!agent) throw new Error("No agent is available.");
     const created = await api.createSession(agent.name, { ...pendingSettings });
-    setSession(created);
-    setBoard(created.board ?? null);
+    showSession(created);
     return created;
   };
 
@@ -216,11 +226,17 @@ export default function App() {
       await streamTurn(id, content, pending.map((a) => a.path), (event) => {
         setEvents((prev) => [...prev, event]);
         if (event.type === "board") setBoard(event.board);
+        if (event.type === "handoff") {
+          // The new agent's panels (e.g. its board) appear or disappear at once.
+          setBoard(event.ui_state.board ?? null);
+          setActiveAgent({ name: event.to_agent, title: event.title });
+        }
       });
       const detail = await api.session(id);
-      setSession(detail);
-      setEvents(detail.events);
-      setBoard(detail.board ?? null);
+      if (shownSession.current === id) {
+        showSession(detail);
+        setEvents(detail.events);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setDraft((d) => d || content);
@@ -231,23 +247,34 @@ export default function App() {
     }
   };
 
-  /** The user dragged a piece. Lesson moves (and the end of a game) are reported to the coach. */
-  const chessMove = async (from: string, to: string): Promise<boolean> => {
-    if (!session || busy) return false;
+  /** Apply a board change from the server, if the user is still looking at that chat. */
+  const applyChess = async (sessionId: string, request: () => Promise<ChessMoveResult>): Promise<boolean> => {
+    if (busy || moving) return false;
     setChessNotice(null);
+    setMoving(true);
     try {
       const before = board?.history.length ?? 0;
-      const result = await api.chessMove(session.id, from + to);
+      const result = await request();
       // Let the user's own move settle before the bot's reply animates in.
       if (result.board.history.length > before + 1) await new Promise((r) => setTimeout(r, 380));
+      if (shownSession.current !== sessionId) return true; // the user switched chats meanwhile
       setBoard(result.board);
       refreshSessions();
-      if (result.needs_coach) send(result.message);
+      // Lesson moves and the end of a game are reported to the coach as a chat message.
+      if (result.needs_coach) setTimeout(() => send(result.message), 0);
       return true;
     } catch (e) {
-      setChessNotice(e instanceof Error ? e.message : String(e));
+      if (shownSession.current === sessionId) setChessNotice(e instanceof Error ? e.message : String(e));
       return false;
+    } finally {
+      setMoving(false);
     }
+  };
+
+  /** The user dragged a piece (UCI, e.g. "e2e4", or "e7e8n" for a promotion). */
+  const chessMove = (uci: string) => (session ? applyChess(session.id, () => api.chessMove(session.id, uci)) : Promise.resolve(false));
+  const claimDraw = () => {
+    if (session) applyChess(session.id, () => api.claimDraw(session.id));
   };
 
   const dropHandlers = {
@@ -370,7 +397,9 @@ export default function App() {
         </header>
 
         <div className={`dialog ${board ? "has-board" : ""}`} ref={dialogRef}>
-          {board && <ChessPanel board={board} busy={busy} onMove={chessMove} notice={chessNotice} />}
+          {board && (
+            <ChessPanel board={board} busy={busy} onMove={chessMove} onClaimDraw={claimDraw} notice={chessNotice} />
+          )}
           <div className="conversation" ref={scroller} onScroll={onScroll}>
             <div className="column">
               {turns.length === 0 && agent && (
@@ -395,7 +424,12 @@ export default function App() {
                 </section>
               )}
               {turns.map((turn, i) => (
-                <TurnView key={turn.index} turn={turn} live={busy && i === turns.length - 1} />
+                <TurnView
+                  key={turn.index}
+                  turn={turn}
+                  live={busy && i === turns.length - 1}
+                  agentTitle={agents.find((a) => a.name === turn.agent)?.title}
+                />
               ))}
             </div>
           </div>
@@ -475,7 +509,7 @@ export default function App() {
                   }
                 }}
                 placeholder={
-                  attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${agent?.title ?? "the agent"}`
+                  attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${activeAgent?.title ?? agent?.title ?? "the agent"}`
                 }
                 rows={Math.min(8, Math.max(1, draft.split("\n").length))}
                 aria-label="Message"

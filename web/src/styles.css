@@ -144,7 +144,23 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
   padding: 16px 20px 14px; border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.55);
 }
-.chess-board { width: var(--board); flex: none; }
+.chess-board { width: var(--board); flex: none; position: relative; }
+.promotion {
+  position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: rgba(244, 238, 219, 0.88); border-radius: 10px; backdrop-filter: blur(2px);
+}
+.promotion-title { font-weight: 600; color: var(--ink); }
+.promotion-choices { display: flex; gap: 8px; }
+.promotion-choice {
+  width: calc(var(--board) / 6); height: calc(var(--board) / 6); font-size: calc(var(--board) / 9); line-height: 1;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer;
+  box-shadow: 0 2px 6px rgba(28, 52, 12, 0.15);
+}
+.promotion-choice:hover { border-color: var(--agent); background: var(--agent-soft); }
+.promotion-cancel { border: 0; background: none; color: var(--ink-3); cursor: pointer; font-size: 13px; }
+.small-btn { align-self: flex-start; padding: 5px 12px; font-size: 13px; }
+.handoff-divider { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; color: var(--ink-3); font-size: 13px; font-weight: 600; }
+.handoff-divider::before, .handoff-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .chess-side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; max-height: var(--board); }
 .chess-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .chess-mode {

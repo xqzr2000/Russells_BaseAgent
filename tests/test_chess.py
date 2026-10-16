@@ -185,3 +185,119 @@ def test_fake_model_walks_through_the_board(tmp_path):
 
 def test_coach_is_registered():
     assert ChessCoachAgent.name == "chess_coach" and ChessCoachAgent.examples
+
+
+# ------------------------------------------------------------------ review fixes
+
+def test_threat_arrow_uses_the_opponent_when_both_sides_can_play_the_move():
+    board = ChessSession()
+    board.set_position("4k1n1/8/8/8/4N3/8/8/4K3 w - - 0 1")  # Ne4 and Ng8 both reach f6
+    assert board.find_move("Nf6", "opponent")[0].uci() == "g8f6"
+    assert board.find_move("Nf6", "to_move")[0].uci() == "e4f6"
+    with pytest.raises(ChessError, match="side not to move"):
+        board.find_move("Kd2", "opponent")
+
+
+def test_repetition_is_claimable_not_automatic():
+    board = ChessSession()
+    board.new_game()
+    board.board = chess.Board("4k1n1/8/8/8/8/8/8/4K1N1 w - - 0 1")
+    for move in ["g1f3", "g8f6", "f3g1", "f6g8"] * 2:
+        board.board.push_uci(move)
+    assert not board.game_over and board.view()["draw_claimable"]
+    assert board.claim_draw() == "threefold repetition"
+    assert board.game_over and not board.view()["interactive"] and "Draw claimed" in board.view()["caption"]
+    with pytest.raises(ChessError):
+        board.claim_draw()
+
+
+def test_underpromotion_and_default_queen():
+    board = ChessSession()
+    board.set_position("8/4P3/8/8/8/8/8/k6K w - - 0 1", user_moves_next=True)
+    board.user_move("e7e8n")
+    assert board.board.piece_at(chess.E8).symbol() == "N"
+    board.set_position("8/4P3/8/8/8/8/8/k6K w - - 0 1", user_moves_next=True)
+    board.user_move("e7e8")
+    assert board.board.piece_at(chess.E8).symbol() == "Q"
+
+
+def test_attack_lookups_come_from_the_board():
+    board = ChessSession()
+    board.set_position("4k3/8/8/4p3/8/5N2/8/4K3 w - - 0 1")
+    assert "e5" in board.attacked_by("f3") and "d4" in board.attacked_by("f3")
+    assert board.attackers_of("e5") == {"white": ["Nf3"], "black": []}
+    assert board.attackers_of("d4") == {"white": ["Nf3"], "black": ["e5"]}
+
+
+def test_claim_draw_endpoint(tmp_path):
+    llm = ScriptedLLM([{"content": "", "tool_calls": [call("new_game", {})]}, {"content": "Go!"}])
+    with client_with(llm, tmp_path) as client:
+        session = client.post("/api/sessions", json={"agent": "chess_coach"}).json()
+        client.post(f"/api/sessions/{session['id']}/messages", json={"content": "Let's play"})
+        refused = client.post(f"/api/sessions/{session['id']}/chess/claim-draw")
+        assert refused.status_code == 422 and "can't be claimed" in refused.json()["detail"]
+
+
+# ------------------------------------------------------------------ handoff from the main chat
+
+def test_lets_play_chess_hands_the_chat_to_the_coach_and_back(tmp_path):
+    llm = ScriptedLLM([
+        {"content": "", "tool_calls": [call("handoff", {"agent": "chess_coach"})]},
+        {"content": "", "tool_calls": [call("new_game", {})]},
+        {"content": "You're White. Your move!"},
+        {"content": "", "tool_calls": [call("handoff_back", {"note": "wants arithmetic"})]},
+        {"content": "It is 42."},
+    ])
+    with client_with(llm, tmp_path) as client:
+        session = client.post("/api/sessions", json={"agent": "coordinator"}).json()
+        sid = session["id"]
+        assert "board" not in session and session["active_agent"]["name"] == "coordinator"
+
+        events = parse_sse(client.post(f"/api/sessions/{sid}/messages",
+                                       json={"content": "let's play chess"}).text)
+        starts = [e for e in events if e["type"] == "turn_start"]
+        assert [(e["agent"], e["turn"], e["via"]) for e in starts] == [
+            ("coordinator", 1, None), ("chess_coach", 2, "coordinator")]
+        assert starts[1]["user_message"] == "let's play chess"
+        handoff = next(e for e in events if e["type"] == "handoff")
+        assert handoff["to_agent"] == "chess_coach" and handoff["ui_state"]["board"]
+        assert any(e["type"] == "board" and e["board"]["mode"] == "game" for e in events)
+        ends = [e for e in events if e["type"] == "turn_end"]
+        assert ends[0]["final_text"] == "Handing you over to the Chess coach."
+        assert ends[1]["final_text"] == "You're White. Your move!"
+        assert len(llm.requests) == 3  # the coordinator made one call, the coach two
+
+        # The coordinator's tool list offered the handoff, and the coach can hand back.
+        assert any(t["function"]["name"] == "handoff" for t in llm.requests[0]["tools"])
+        assert any(t["function"]["name"] == "handoff_back" for t in llm.requests[1]["tools"])
+
+        detail = client.get(f"/api/sessions/{sid}").json()
+        assert detail["active_agent"]["name"] == "chess_coach" and detail["board"]["interactive"]
+        assert len([e for e in detail["events"] if e["type"] == "turn_start"]) == 2
+        assert detail["title"] == "let's play chess"
+        moved = client.post(f"/api/sessions/{sid}/chess/move", json={"move": "e2e4"}).json()
+        assert len(moved["board"]["history"]) == 2
+
+        events = parse_sse(client.post(f"/api/sessions/{sid}/messages",
+                                       json={"content": "actually, what is 6*7?"}).text)
+        starts = [e for e in events if e["type"] == "turn_start"]
+        assert [(e["agent"], e["turn"], e["via"]) for e in starts] == [
+            ("chess_coach", 3, None), ("coordinator", 4, "chess_coach")]
+        assert "wants arithmetic" in starts[1]["user_message"]
+        assert events[-1]["final_text"] == "It is 42."
+        detail = client.get(f"/api/sessions/{sid}").json()
+        assert detail["active_agent"]["name"] == "coordinator" and "board" not in detail
+        assert client.post(f"/api/sessions/{sid}/chess/move", json={"move": "d2d4"}).status_code == 404
+
+
+def test_fake_model_lets_play_chess_from_the_main_chat(tmp_path):
+    with client_with(FakeLLM(), tmp_path) as client:
+        sid = client.post("/api/sessions", json={"agent": "coordinator"}).json()["id"]
+        events = parse_sse(client.post(f"/api/sessions/{sid}/messages",
+                                       json={"content": "Let's play chess"}).text)
+        board = [e for e in events if e["type"] == "board"][-1]["board"]
+        assert board["mode"] == "game" and board["interactive"]
+        assert events[-1]["final_text"].startswith("(fake model) New game!")
+        lesson = parse_sse(client.post(f"/api/sessions/{sid}/messages",
+                                       json={"content": "Teach me how the knight moves"}).text)
+        assert [e for e in lesson if e["type"] == "board"][-1]["board"]["dots"]

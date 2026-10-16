@@ -25,6 +25,7 @@ export interface BoardState {
   last_move: string | null; // UCI, e.g. "e2e4"
   in_check: boolean;
   game_over: boolean;
+  draw_claimable: boolean; // threefold repetition or 50 moves: the user may claim a draw
   caption: string;
   arrows: { from: string; to: string; color: "green" | "blue" | "red" }[];
   highlights: { square: string; color: "yellow" | "green" | "red" | "blue" }[];
@@ -48,7 +49,7 @@ export interface ToolCallInfo {
 type Base = { turn: number };
 
 export type AgentEvent =
-  | (Base & { type: "turn_start"; user_message: string; model: string; agent: string })
+  | (Base & { type: "turn_start"; user_message: string; model: string; agent: string; via: string | null })
   | (Base & { type: "step_start"; step: number })
   | (Base & { type: "text_delta"; step: number; delta: string })
   | (Base & { type: "assistant_message"; step: number; content: string; tool_calls: ToolCallInfo[] })
@@ -67,6 +68,13 @@ export type AgentEvent =
   | (Base & { type: "usage"; step: number; usage: Usage })
   | (Base & { type: "compaction"; tokens_before: number; tokens_after: number; summary: string })
   | (Base & { type: "board"; board: BoardState })
+  | (Base & {
+      type: "handoff";
+      from_agent: string;
+      to_agent: string;
+      title: string;
+      ui_state: { board?: BoardState };
+    })
   | (Base & { type: "warning"; message: string })
   | (Base & { type: "error"; message: string })
   | (Base & {
@@ -110,7 +118,8 @@ export interface SessionDetail extends SessionSummary {
   settings: AgentSettings;
   events: AgentEvent[];
   usage: Usage;
-  board?: BoardState; // only for agents with a chess board
+  active_agent: { name: string; title: string }; // who answers now (after a handoff)
+  board?: BoardState; // only while an agent with a chess board is answering
 }
 
 export interface ServerConfig {

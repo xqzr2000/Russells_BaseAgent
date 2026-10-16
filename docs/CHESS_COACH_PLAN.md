@@ -2,7 +2,7 @@
 
 Repo: github.com/xqzr2000/Russells_BaseAgent, branch `chess-coach` (from `main`, which already has the meadow UI).
 Source: the chess agent in github.com/xqzr2000/cmu-11-768-assignment-1.
-Status: 2026-10-15 — M1 (board plumbing) built: pick **Chess coach** in the agent picker. The handoff from the coordinator comes in M2.
+Status: 2026-10-15 — M1 built, plus the handoff from M2: "let's play chess" in the main chat brings in the coach. Next: demonstrations, "your turn" exercises and lessons.
 
 ## Goal
 
@@ -142,7 +142,7 @@ M1 notes:
 - The offline `fake-echo` model walks through a knight lesson ("teach me chess") and a game ("let's play").
 
 **M2 Handoff and level 0 to 1 lessons**
-- [ ] `handoff` / `handoff_back` and the `handoff` event
+- [x] `handoff` / `handoff_back` and the `handoff` event (done early, with review fixes: side-aware threat arrows, no board crossing between chats, promotion picker, draws by repetition or 50 moves are claimed rather than automatic, `show_attacks` / `show_attackers`)
 - [ ] `demonstrate` and `ask_user_move`
 - [ ] Placement, plus the level 0 and 1 skills
 

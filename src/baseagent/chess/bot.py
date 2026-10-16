@@ -19,7 +19,11 @@ MATE = 100_000
 def evaluate(board: chess.Board) -> int:
     """Score from White's point of view, in centipawns."""
 
-    outcome = board.outcome(claim_draw=True)
+    # A repeated position counts as a draw for the search, so the bot neither walks into
+    # a repetition when it is winning nor misses one when it is losing.
+    if board.is_repetition(3):
+        return 0
+    outcome = board.outcome()
     if outcome is not None:
         if outcome.winner is None:
             return 0
@@ -34,7 +38,7 @@ def evaluate(board: chess.Board) -> int:
 
 
 def _search(board: chess.Board, depth: int, alpha: int, beta: int) -> int:
-    if depth == 0 or board.outcome(claim_draw=True) is not None:
+    if depth == 0 or board.is_repetition(3) or board.outcome() is not None:
         return evaluate(board)
     maximizing = board.turn == chess.WHITE
     best = -MATE * 2 if maximizing else MATE * 2

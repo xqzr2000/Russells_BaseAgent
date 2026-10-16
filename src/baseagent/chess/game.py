@@ -60,6 +60,7 @@ class ChessSession:
     highlights: list[dict[str, str]] = field(default_factory=list)
     dots: list[str] = field(default_factory=list)
     last_move: str | None = None
+    draw_claimed: bool = False
 
     # ------------------------------------------------------------ positions
 
@@ -72,6 +73,7 @@ class ChessSession:
                              "next must have White to move (' w ' in the FEN).")
         self.board = board
         self.mode = "lesson"
+        self.draw_claimed = False
         self.user_can_move = user_moves_next
         self.caption = caption
         self.last_move = None
@@ -82,6 +84,7 @@ class ChessSession:
 
         self.board = chess.Board()
         self.mode = "game"
+        self.draw_claimed = False
         self.user_can_move = True
         self.caption = "New game: you play White. Make your first move."
         self.last_move = None
@@ -132,17 +135,26 @@ class ChessSession:
             raise ChessError(f"{text} is not a legal move here ({_side(board)} to move).")
         return move
 
-    def find_move(self, text: str) -> tuple[chess.Move, chess.Board]:
-        """A legal move for either side: the side to move first, then the other side (a threat)."""
+    def find_move(self, text: str, side: Literal["to_move", "opponent", "either"] = "either"
+                  ) -> tuple[chess.Move, chess.Board]:
+        """A legal move for the side to move, for its opponent (a threat), or for either.
 
-        try:
-            return self.parse_move(text), self.board
-        except ChessError:
-            other = self._other_side_board()
+        ``side="either"`` tries the side to move first. Arrows for threats pass
+        ``"opponent"``, so a SAN move both sides could play (two knights that can
+        reach f6) is read as the opponent's.
+        """
+
+        boards = {"to_move": [self.board], "opponent": [self._other_side_board()],
+                  "either": [self.board, self._other_side_board()]}[side]
+        for board in boards:
             try:
-                return self.parse_move(text, other), other
+                return self.parse_move(text, board), board
             except ChessError:
-                raise ChessError(f"{text} is not a legal move for either side in this position.") from None
+                continue
+        who = {"to_move": f"{_side(self.board)} (the side to move)",
+               "opponent": f"{_side(boards[0])} (the side not to move)",
+               "either": "either side"}[side]
+        raise ChessError(f"{text} is not a legal move for {who} in this position.")
 
     def user_move(self, text: str) -> MoveOutcome:
         """Play the user's (White's) move; in a game the bot answers at once."""
@@ -174,6 +186,20 @@ class ChessSession:
             self.user_can_move = False
             self.caption = ""
         return outcome
+
+    def claim_draw(self) -> str:
+        """End a game as a draw by threefold repetition or the 50-move rule, if White may claim it."""
+
+        if self.mode != "game" or self.game_over:
+            raise ChessError("There is no game in progress to claim a draw in.")
+        if not self.board.can_claim_draw():
+            raise ChessError("A draw can't be claimed in this position.")
+        reason = ("threefold repetition" if self.board.can_claim_threefold_repetition()
+                  else "the 50-move rule")
+        self.draw_claimed = True
+        self.user_can_move = False
+        self.caption = f"Draw claimed ({reason})."
+        return reason
 
     def _push(self, move: chess.Move) -> None:
         self.board.push(move)
@@ -216,6 +242,28 @@ class ChessSession:
         self.highlights.append({"square": square_name.lower(), "color": "yellow"})
         return targets
 
+    def attacked_by(self, square_name: str) -> list[str]:
+        """Squares the piece on ``square_name`` attacks (whether or not they are occupied)."""
+
+        square = _square(square_name)
+        if self.board.piece_at(square) is None:
+            raise ChessError(f"There is no piece on {square_name}.")
+        return sorted((chess.square_name(s) for s in self.board.attacks(square)), key=_square)
+
+    def attackers_of(self, square_name: str) -> dict[str, list[str]]:
+        """Pieces of each colour that attack ``square_name``, as SAN-style labels (e.g. Nf3)."""
+
+        square = _square(square_name)
+        found: dict[str, list[str]] = {}
+        for color, name in ((chess.WHITE, "white"), (chess.BLACK, "black")):
+            labels = []
+            for attacker in sorted(self.board.attackers(color, square)):
+                piece = self.board.piece_at(attacker)
+                letter = "" if piece.piece_type == chess.PAWN else piece.symbol().upper()
+                labels.append(f"{letter}{chess.square_name(attacker)}")
+            found[name] = labels
+        return found
+
     def highlight(self, squares: list[str], color: HighlightColor) -> None:
         names = [chess.square_name(_square(s)) for s in squares]
         self.highlights = [h for h in self.highlights if h["square"] not in names]
@@ -232,14 +280,23 @@ class ChessSession:
         if not self.has_kings:
             return False
         if self.mode == "game":
-            return self.board.outcome(claim_draw=True) is not None
+            # Only results that end the game by themselves; threefold repetition and the
+            # 50-move rule must be claimed (claim_draw), as in over-the-board chess.
+            return self.draw_claimed or self.board.outcome() is not None
         # Lessons ignore draw rules (K+N vs K is a fine teaching position).
         return self.board.is_checkmate() or self.board.is_stalemate()
+
+    @property
+    def draw_claimable(self) -> bool:
+        return (self.mode == "game" and self.has_kings and not self.game_over
+                and self.board.turn == chess.WHITE and self.board.can_claim_draw())
 
     def _status_line(self) -> str:
         board = self.board
         if self.mode == "game":
-            outcome = board.outcome(claim_draw=True) if self.has_kings else None
+            if self.draw_claimed:
+                return self.caption
+            outcome = board.outcome() if self.has_kings else None
             if outcome is not None:
                 if outcome.winner is None:
                     return f"Draw ({outcome.termination.name.lower().replace('_', ' ')})."
@@ -268,6 +325,7 @@ class ChessSession:
             "last_move": self.last_move,
             "in_check": self.has_kings and self.board.is_check(),
             "game_over": self.game_over,
+            "draw_claimable": self.draw_claimable,
             "caption": self.caption,
             "arrows": list(self.arrows),
             "highlights": list(self.highlights),
@@ -304,6 +362,7 @@ class ChessSession:
             f"in_check: {self.has_kings and self.board.is_check()}",
             f"game_over: {self.game_over}" + (f" ({self._status_line()})" if self.game_over and self.mode == 'game' else ""),
             f"last_move: {self.last_move or '(none)'}",
+            f"draw_claimable_by_user: {self.draw_claimable}",
             "board (uppercase = White, lowercase = Black):",
             *rows,
             f"moves_so_far: {history}",

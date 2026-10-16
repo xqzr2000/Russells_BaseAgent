@@ -230,6 +230,7 @@ class FakeLLM:
 
     _ARITH = re.compile(r"[-+*/().\d\s^%]{3,}")
     _DATA_FILE = re.compile(r"[\w\-./]+\.(?:csv|tsv)\b", re.IGNORECASE)
+    _CHESS = re.compile(r"\bchess\b|\bknight\b", re.IGNORECASE)
 
     async def chat(self, messages, settings, tools=None, on_text=None) -> LLMResponse:
         tool_names = {t["function"]["name"] for t in tools or []}
@@ -243,6 +244,8 @@ class FakeLLM:
         data_file = self._DATA_FILE.search(user_text)
         if not tools:  # compaction request
             reply = "Summary: conversation so far handled by the fake model."
+        elif "handoff" in tool_names and not results and self._CHESS.search(user_text):
+            return self._call("handoff", {"agent": "chess_coach"})
         elif "set_position" in tool_names and (chess := self._chess(user_text, results)):
             if isinstance(chess, LLMResponse):
                 return chess

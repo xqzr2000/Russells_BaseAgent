@@ -43,6 +43,8 @@ export const api = {
   /** The user moved a piece on the chess board (UCI, e.g. "e2e4"). */
   chessMove: (id: string, move: string) =>
     json<ChessMoveResult>(`/api/sessions/${id}/chess/move`, { method: "POST", body: JSON.stringify({ move }) }),
+  /** The user claims a draw (threefold repetition or the 50-move rule). */
+  claimDraw: (id: string) => json<ChessMoveResult>(`/api/sessions/${id}/chess/claim-draw`, { method: "POST" }),
   /** Upload a file into the chat's workspace (data/<name>); the raw file is the body. */
   uploadFile: (id: string, file: File) =>
     json<UploadedFile>(`/api/sessions/${id}/files/${encodeURIComponent(file.name)}`, {
