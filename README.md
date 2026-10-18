@@ -58,10 +58,13 @@ class DataScienceAgent(BaseAgent):
 
 | Agent | What it does |
 |---|---|
-| **Coordinator** (default) | Your main chat. Answers simple things itself and delegates specialized work to any agent marked `delegatable`. |
+| **Coordinator** (default) | Jack the coordinator, answers simple things and delegates specialized work to any agent marked `delegatable`. |
 | **Data scientist** | Do basic EDA in a Jupyter kernel. Returns a summary and a downloadable `.ipynb`. |
 | **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
 | **Chess coach** | Say *teach me chess*, and see the demo video. |
+
+> Jack the Coordinator is a Jack Russell Terrier. I'm building him to be interactive, with an LLM handling the intelligence and `Three.js` bringing him to life.
+> Wish me luck!
 
 ### EDA on a CSV
 
