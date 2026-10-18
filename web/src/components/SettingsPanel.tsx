@@ -20,7 +20,8 @@ interface Props {
   onClose: () => void;
 }
 
-export function SettingsDrawer({ open, settings, config, models, modelsError, onRefreshModels, onSave, onClose }: Props) {
+/** Settings, as a frosted panel dropping down from the top-right pill. */
+export function SettingsPanel({ open, settings, config, models, modelsError, onRefreshModels, onSave, onClose }: Props) {
   const [draft, setDraft] = useState<AgentSettings | null>(settings);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,9 +62,10 @@ export function SettingsDrawer({ open, settings, config, models, modelsError, on
   };
 
   return (
-    <div className="drawer-backdrop" onClick={onClose}>
-      <aside className="drawer" role="dialog" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
-        <header className="drawer-head">
+    <>
+      <div className="float-backdrop" onClick={onClose} aria-hidden />
+      <aside className="float-panel settings-panel" role="dialog" aria-label="Settings">
+        <header className="panel-head">
           <h2>Settings</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close settings">
             ✕
@@ -210,13 +212,13 @@ export function SettingsDrawer({ open, settings, config, models, modelsError, on
         </section>
 
         {error && <p className="form-error">{error}</p>}
-        <footer className="drawer-foot">
+        <footer className="panel-foot">
           <p className="hint">Applies to this chat and becomes the default for new chats.</p>
           <button className="btn primary" onClick={save} disabled={saving}>
             {saving ? "Saving..." : "Save settings"}
           </button>
         </footer>
       </aside>
-    </div>
+    </>
   );
 }
