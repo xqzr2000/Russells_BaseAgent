@@ -98,9 +98,12 @@ make dev
 - When prompted, open the Chat room port (5173)
 - You can also open it later from the Ports tab
 
-### See this chat room in action.
+### See it in action.
 
-https://github.com/user-attachments/assets/175ca181-0886-4434-9b4b-8a1a695c78e1
+- Teaching Chess
+- Data Science Capabilities
+
+https://github.com/user-attachments/assets/8b300387-fe7c-4ea6-9861-8a92126647fc
 
 
 ## Repo tree
