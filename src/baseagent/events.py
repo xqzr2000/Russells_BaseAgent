@@ -53,6 +53,9 @@ class TurnStart(_Event):
     user_message: str
     model: str
     agent: str
+    # Set when another agent handed this message over (e.g. "coordinator"); the UI then
+    # shows "<agent> joined" instead of repeating the user's message.
+    via: str | None = None
 
 
 class StepStart(_Event):
@@ -114,6 +117,24 @@ class Compaction(_Event):
     summary: str
 
 
+class Board(_Event):
+    """The chess board changed (position, arrows, dots...). ``board`` is ``ChessSession.view()``."""
+
+    type: Literal["board"] = "board"
+    board: dict[str, Any]
+
+
+class Handoff(_Event):
+    """The chat switched agents: ``to_agent`` answers from now on. ``ui_state`` is its live
+    state (e.g. its chess board), so the UI can show or hide panels at once."""
+
+    type: Literal["handoff"] = "handoff"
+    from_agent: str
+    to_agent: str
+    title: str
+    ui_state: dict[str, Any] = Field(default_factory=dict)
+
+
 class Warning(_Event):  # noqa: A001 - mirrors the event name used in the UI
     type: Literal["warning"] = "warning"
     message: str
@@ -142,6 +163,8 @@ AgentEvent = Annotated[
     | ToolEnd
     | UsageEvent
     | Compaction
+    | Board
+    | Handoff
     | Warning
     | Error
     | TurnEnd,

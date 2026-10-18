@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
+import { ChessPanel } from "./components/ChessPanel";
 import { FileIcon, formatSize } from "./components/FileIcon";
 import { Meadow, firstImpression, jackForced } from "./components/Meadow";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -10,6 +11,8 @@ import type {
   AgentEvent,
   AgentInfo,
   AgentSettings,
+  BoardState,
+  ChessMoveResult,
   ServerConfig,
   SessionDetail,
   SessionSummary,
@@ -52,6 +55,12 @@ export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
+  const [board, setBoard] = useState<BoardState | null>(null); // the chess coach's board, if any
+  const [chessNotice, setChessNotice] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false); // a board move is on its way to the server
+  const [activeAgent, setActiveAgent] = useState<{ name: string; title: string } | null>(null); // after a handoff
+  // The chat on screen. Late responses for another chat (after switching) are dropped.
+  const shownSession = useRef<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [pendingSettings, setPendingSettings] = useState<Partial<AgentSettings>>(loadDefaults);
@@ -66,6 +75,7 @@ export default function App() {
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLFormElement>(null);
   const stickToBottom = useRef(true);
   /*
@@ -148,14 +158,29 @@ export default function App() {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [events]);
 
+  useEffect(() => {
+    if (!chessNotice) return;
+    const timer = window.setTimeout(() => setChessNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [chessNotice]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
+  const showSession = (detail: SessionDetail | null) => {
+    shownSession.current = detail?.id ?? null;
+    setSession(detail);
+    setBoard(detail?.board ?? null);
+    setActiveAgent(detail?.active_agent ?? null);
+  };
+
   const newChat = (name = agentName) => {
-    setSession(null);
+    if (moving) return;
+    showSession(null);
     setEvents([]);
+    setChessNotice(null);
     setAgentName(name);
     setAttachments([]);
     setError(null);
@@ -163,11 +188,12 @@ export default function App() {
   };
 
   const openSession = async (id: string) => {
-    if (busy || uploading) return;
+    if (busy || uploading || moving) return;
     try {
       const detail = await api.session(id);
-      setSession(detail);
+      showSession(detail);
       setEvents(detail.events);
+      setChessNotice(null);
       setAgentName(detail.agent);
       setAttachments([]);
       setError(null);
@@ -190,7 +216,7 @@ export default function App() {
     if (session) return session;
     if (!agent) throw new Error("No agent is available.");
     const created = await api.createSession(agent.name, { ...pendingSettings });
-    setSession(created);
+    showSession(created);
     return created;
   };
 
@@ -224,10 +250,20 @@ export default function App() {
     try {
       const current = await ensureSession();
       const id = current.id;
-      await streamTurn(id, content, pending.map((a) => a.path), (event) => setEvents((prev) => [...prev, event]));
+      await streamTurn(id, content, pending.map((a) => a.path), (event) => {
+        setEvents((prev) => [...prev, event]);
+        if (event.type === "board") setBoard(event.board);
+        if (event.type === "handoff") {
+          // The new agent's panels (e.g. its board) appear or disappear at once.
+          setBoard(event.ui_state.board ?? null);
+          setActiveAgent({ name: event.to_agent, title: event.title });
+        }
+      });
       const detail = await api.session(id);
-      setSession(detail);
-      setEvents(detail.events);
+      if (shownSession.current === id) {
+        showSession(detail);
+        setEvents(detail.events);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setDraft((d) => d || content);
@@ -236,6 +272,39 @@ export default function App() {
       setBusy(false);
       refreshSessions();
     }
+  };
+
+  /** Apply a board change from the server, if the user is still looking at that chat. */
+  const applyChess = async (sessionId: string, request: () => Promise<ChessMoveResult>): Promise<boolean> => {
+    if (busy || moving) return false;
+    setChessNotice(null);
+    setMoving(true);
+    try {
+      const before = board?.history.length ?? 0;
+      const result = await request();
+      // Let the user's own move settle before the bot's reply animates in.
+      if (result.board.history.length > before + 1) await new Promise((r) => setTimeout(r, 380));
+      if (shownSession.current !== sessionId) return true; // the user switched chats meanwhile
+      setBoard(result.board);
+      refreshSessions();
+      // Lesson moves and the end of a game are reported to the coach as a chat message.
+      if (result.needs_coach) setTimeout(() => send(result.message), 0);
+      return true;
+    } catch (e) {
+      if (shownSession.current === sessionId) setChessNotice(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  /** The user dragged a piece (UCI, e.g. "e2e4", or "e7e8n" for a promotion). */
+  const chessMove = (uci: string) => (session ? applyChess(session.id, () => api.chessMove(session.id, uci)) : Promise.resolve(false));
+  const claimDraw = () => {
+    if (session) applyChess(session.id, () => api.claimDraw(session.id));
+  };
+  const rewindBoard = (to: "back" | "start") => {
+    if (session) applyChess(session.id, () => api.chessRewind(session.id, to));
   };
 
   const dropHandlers = {
@@ -279,6 +348,9 @@ export default function App() {
 
   const keyMissing = config && !config.openai_key_configured;
   const hasChat = turns.length > 0;
+  const showDialog = hasChat || board !== null;
+  // After a handoff (e.g. to the chess coach), the pill and placeholder name the agent now talking.
+  const talkingTo = activeAgent?.title ?? agent?.title;
 
   return (
     <div className="app" {...dropHandlers}>
@@ -302,12 +374,12 @@ export default function App() {
             setSidebarOpen((v) => !v);
           }}
           aria-expanded={sidebarOpen}
-          aria-label={`Chats and agents (current agent: ${agent?.title ?? "none"})`}
+          aria-label={`Chats and agents (talking to: ${talkingTo ?? "none"})`}
         >
           <svg className="chevron" viewBox="0 0 16 16" width="16" height="16" aria-hidden>
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span className="pill-text">{agent?.title ?? "BaseAgent"}</span>
+          <span className="pill-text">{talkingTo ?? "BaseAgent"}</span>
         </button>
         <button
           className={`pill model-pill ${settingsOpen ? "is-open" : ""}`}
@@ -334,12 +406,30 @@ export default function App() {
         </button>
       </header>
 
-      {/* The dialog panel only appears once there's a conversation. */}
-      <div className={`conversation ${hasChat ? "is-shown" : ""}`} ref={scroller} onScroll={onScroll} aria-hidden={!hasChat}>
-        <div className="column">
-          {turns.map((turn, i) => (
-            <TurnView key={turn.index} turn={turn} live={busy && i === turns.length - 1} />
-          ))}
+      {/* The frosted dialog panel: only once there's a conversation (or a chess board). */}
+      <div className={`dialog ${board ? "has-board" : ""} ${showDialog ? "is-shown" : ""}`} ref={dialogRef} aria-hidden={!showDialog}>
+        {board && (
+          <ChessPanel
+            board={board}
+            busy={busy || moving}
+            onMove={chessMove}
+            onClaimDraw={claimDraw}
+            onRewind={rewindBoard}
+            onAsk={(message) => send(message)}
+            notice={chessNotice}
+          />
+        )}
+        <div className="conversation" ref={scroller} onScroll={onScroll}>
+          <div className="column">
+            {turns.map((turn, i) => (
+              <TurnView
+                key={turn.index}
+                turn={turn}
+                live={busy && i === turns.length - 1}
+                agentTitle={agents.find((a) => a.name === turn.agent)?.title}
+              />
+            ))}
+          </div>
         </div>
       </div>
 
@@ -440,7 +530,7 @@ export default function App() {
                 }
               }}
               placeholder={
-                attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${agent?.title ?? "the agent"}`
+                attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${talkingTo ?? "the agent"}`
               }
               rows={Math.min(8, Math.max(1, draft.split("\n").length))}
               aria-label="Message"

@@ -230,6 +230,7 @@ class FakeLLM:
 
     _ARITH = re.compile(r"[-+*/().\d\s^%]{3,}")
     _DATA_FILE = re.compile(r"[\w\-./]+\.(?:csv|tsv)\b", re.IGNORECASE)
+    _CHESS = re.compile(r"\bchess\b|\bknight\b", re.IGNORECASE)
 
     async def chat(self, messages, settings, tools=None, on_text=None) -> LLMResponse:
         tool_names = {t["function"]["name"] for t in tools or []}
@@ -243,6 +244,12 @@ class FakeLLM:
         data_file = self._DATA_FILE.search(user_text)
         if not tools:  # compaction request
             reply = "Summary: conversation so far handled by the fake model."
+        elif "handoff" in tool_names and not results and self._CHESS.search(user_text):
+            return self._call("handoff", {"agent": "chess_coach"})
+        elif "set_position" in tool_names and (chess := self._chess(user_text, results)):
+            if isinstance(chess, LLMResponse):
+                return chess
+            reply = chess
         elif results:
             result = results[-1]["content"]
             fence = "~~~~" if "```" in result else "```"  # results can hold fenced text
@@ -268,6 +275,46 @@ class FakeLLM:
                 await on_text(word)
                 await asyncio.sleep(0.02)
         return LLMResponse({"role": "assistant", "content": reply}, Usage(total_tokens=0))
+
+    @classmethod
+    def _chess(cls, user_text: str, results: list[dict[str, Any]]) -> LLMResponse | str | None:
+        """An offline walk-through of the chess coach's board tools."""
+        text = user_text.lower()
+        if results:
+            last = results[-1]
+            if last.get("tool_call_id", "").startswith("call_new_game"):
+                return "(fake model) New game! You're White: drag a piece to make your first move."
+            if last.get("tool_call_id", "").startswith("call_suggest_move"):
+                return f"(fake model) Here's an idea, shown by the blue arrow. {last['content']}"
+            return ("(fake model) This is a knight. The dots show every square it can jump to: "
+                    "two squares one way, then one to the side. Try it: move the knight.")
+        if re.match(r"i (moved|captured|castled)", text):
+            return f"(fake model) {user_text.strip()} Pick a real model in Settings for real coaching."
+        if "hint" in text:
+            return cls._call("suggest_move", {})
+        if "confused" in text:
+            return ("(fake model) No problem! The offline model can only show two demos. Pick a "
+                    "real model in Settings and the coach will explain the board step by step.")
+        lesson = any(word in text for word in ("teach", "learn", "knight", "how"))
+        if not lesson and ("play" in text or "game" in text):
+            return cls._call("new_game", {})
+        if lesson or "chess" in text:
+            return cls._calls([
+                ("set_position", {"fen": "8/8/8/3N4/8/8/8/8 w", "user_moves_next": True,
+                                  "caption": "The knight moves in an L: two squares, then one to the side."}),
+                ("show_piece_moves", {"square": "d5"}),
+            ])
+        return None
+
+    @staticmethod
+    def _calls(calls: list[tuple[str, dict[str, Any]]]) -> LLMResponse:
+        return LLMResponse({
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": f"call_{name}", "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(args)}}
+                           for name, args in calls],
+        })
 
     @staticmethod
     def _call(name: str, args: dict[str, Any]) -> LLMResponse:

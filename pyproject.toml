@@ -14,6 +14,7 @@ dependencies = [
     "jupyter-client>=8.10.0",
     "ipykernel>=7.4.0",
     "nbformat>=5.11.1",
+    "chess>=1.11",
 ]
 
 [project.scripts]
