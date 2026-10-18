@@ -7,6 +7,8 @@
     POST /api/sessions/{id}/stop       cancel the running turn
     PUT  /api/sessions/{id}/files/{name}   upload a data file (raw body) to data/
     GET  /api/sessions/{id}/files/{path}   download a file from the chat's workspace
+    POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
+    POST /api/sessions/{id}/chess/rewind   step back a move or restart the lesson position
     GET  /api/agents | /api/models | /api/config
 
 In production (``make serve``) it also serves the built web UI from web/dist.
@@ -21,17 +23,18 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
+from baseagent.chess import ChessError, ChessSession
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
@@ -55,6 +58,14 @@ SUGGESTED_MODELS = ["gpt-5-mini", "gpt-5", "gpt-5-nano", "gpt-4.1", "gpt-4.1-min
 class CreateSession(BaseModel):
     agent: str = DEFAULT_AGENT
     settings: dict[str, Any] | None = None
+
+
+class ChessMove(BaseModel):
+    move: str  # UCI from the board (e2e4), SAN also accepted
+
+
+class ChessRewind(BaseModel):
+    to: Literal["back", "start"] = "back"  # back: undo the last move; start: restart the lesson
 
 
 class SendMessage(BaseModel):
@@ -107,6 +118,12 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             return manager.get(session_id)
         except KeyError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    def chess_board_of(session: Session) -> ChessSession:
+        board = getattr(session.current, "chess", None)
+        if not isinstance(board, ChessSession):
+            raise HTTPException(404, "This chat has no chess board.")
+        return board
 
     def workspace_of(session: Session) -> Workspace:
         if session.workspace is None:
@@ -237,6 +254,53 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             raise HTTPException(404, "File not found.")
         return FileResponse(file, filename=file.name)  # Content-Disposition: attachment
 
+    @app.post("/api/sessions/{session_id}/chess/move")
+    async def chess_move(session_id: str, body: ChessMove):
+        """Play the user's move on the chat's board. In a game the bot answers at once
+        (no model call); ``needs_coach`` says whether the UI should report the move to the
+        coach as a chat message (lesson moves, the end of a game)."""
+        session = session_or_404(session_id)
+        board = chess_board_of(session)
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Move once it has finished.")
+        try:
+            outcome = board.user_move(body.move)
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": outcome.needs_coach,
+                "message": outcome.message(), "game_over": outcome.game_over}
+
+    @app.post("/api/sessions/{session_id}/chess/rewind")
+    async def chess_rewind(session_id: str, body: ChessRewind):
+        """Take back the user's last move (lessons and games) or restart the lesson position.
+        No model call: the coach sees the live position the next time it answers."""
+        session = session_or_404(session_id)
+        board = chess_board_of(session)
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
+        try:
+            message = board.rewind(body.to)
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": False, "message": message, "game_over": False}
+
+    @app.post("/api/sessions/{session_id}/chess/claim-draw")
+    async def chess_claim_draw(session_id: str):
+        """The user claims a draw (threefold repetition or the 50-move rule)."""
+        session = session_or_404(session_id)
+        board = chess_board_of(session)
+        if session.busy:
+            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
+        try:
+            reason = board.claim_draw()
+        except ChessError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        session.updated = time.time()
+        return {"board": board.view(), "needs_coach": True,
+                "message": f"I claimed a draw ({reason}).", "game_over": True}
+
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessage):
         session = session_or_404(session_id)
@@ -261,8 +325,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
         async def emit(event) -> None:
             await queue.put(event)
 
-        session.agent.emit_callback = emit
-        task = asyncio.create_task(session.agent.run(with_attachments(body.content, files)))
+        task = asyncio.create_task(session.run_message(with_attachments(body.content, files), emit))
         task.add_done_callback(lambda _: queue.put_nowait(None))
         session.task = task
         session.updated = time.time()
@@ -296,6 +359,14 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             if path and file.is_file() and WEB_DIST in file.resolve().parents:
                 return FileResponse(file)
             return FileResponse(WEB_DIST / "index.html")
+    else:
+        @app.get("/", include_in_schema=False)
+        async def no_ui():
+            # In `make dev` the chat room is served by Vite on 5173; this port is only the API.
+            return HTMLResponse(
+                "<p>This is the agent API (port 8000). In <code>make dev</code> the chat room runs "
+                "on <b>port 5173</b>: open that port instead. To serve the chat room from this "
+                "port, run <code>make serve</code>.</p>")
 
     return app
 

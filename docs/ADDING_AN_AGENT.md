@@ -93,6 +93,22 @@ questions itself and hands specialized work to other agents through one tool,
 
 Nothing in the coordinator changes when you add a specialist.
 
+## Handoff: a specialist that talks to the user directly
+
+Some specialists need a conversation, not a one-shot task: the chess coach
+teaches over many messages. Set `handoff_target = True` and the coordinator
+gets a `handoff(agent, note)` tool (see `handoff.py`):
+
+* The chat switches to the specialist, which answers the user's message in
+  the same reply. Later messages go straight to it.
+* The specialist automatically gets `handoff_back(note)`, which returns the
+  chat to the coordinator (again answering in the same reply).
+* All agents in a chat write into one event log with continuous turn
+  numbers (`Session.run_message` in `server/sessions.py`); the UI shows a
+  "<agent> joined" divider and the new agent's `ui_state()` (e.g. a board).
+* Both tools return `ToolResult(..., end_turn=True)`, which ends the turn
+  without another model call. Any tool can use that.
+
 ## Files: workspaces, uploads and downloads
 
 Each chat gets a folder, `workspace/<session id>/` (`agent.workspace`).

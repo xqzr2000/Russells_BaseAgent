@@ -16,6 +16,34 @@ export interface Attachment {
   url: string | null;
 }
 
+/** The chess coach's board (ChessSession.view() in src/baseagent/chess/game.py). */
+export interface BoardState {
+  fen: string;
+  mode: "lesson" | "game";
+  turn: "white" | "black";
+  interactive: boolean; // the user (White) may drag a piece now
+  last_move: string | null; // UCI, e.g. "e2e4"
+  in_check: boolean;
+  game_over: boolean;
+  draw_claimable: boolean; // threefold repetition or 50 moves: the user may claim a draw
+  caption: string; // the coach's current instruction
+  narration: string; // the last moves in plain words ("You moved your knight...")
+  legal_moves: string[]; // UCI moves the user may play now (empty when the board is locked)
+  can_step_back: boolean;
+  can_restart: boolean; // lessons: the position differs from the lesson's start
+  arrows: { from: string; to: string; color: "green" | "blue" | "red" }[];
+  highlights: { square: string; color: "yellow" | "green" | "red" | "blue" }[];
+  dots: string[];
+  history: string[]; // SAN moves from the position the coach set up
+}
+
+export interface ChessMoveResult {
+  board: BoardState;
+  needs_coach: boolean; // report the move to the coach as a chat message
+  message: string; // e.g. "I played Nf3."
+  game_over: boolean;
+}
+
 export interface ToolCallInfo {
   id: string;
   name: string;
@@ -25,7 +53,7 @@ export interface ToolCallInfo {
 type Base = { turn: number };
 
 export type AgentEvent =
-  | (Base & { type: "turn_start"; user_message: string; model: string; agent: string })
+  | (Base & { type: "turn_start"; user_message: string; model: string; agent: string; via: string | null })
   | (Base & { type: "step_start"; step: number })
   | (Base & { type: "text_delta"; step: number; delta: string })
   | (Base & { type: "assistant_message"; step: number; content: string; tool_calls: ToolCallInfo[] })
@@ -43,6 +71,14 @@ export type AgentEvent =
     })
   | (Base & { type: "usage"; step: number; usage: Usage })
   | (Base & { type: "compaction"; tokens_before: number; tokens_after: number; summary: string })
+  | (Base & { type: "board"; board: BoardState })
+  | (Base & {
+      type: "handoff";
+      from_agent: string;
+      to_agent: string;
+      title: string;
+      ui_state: { board?: BoardState };
+    })
   | (Base & { type: "warning"; message: string })
   | (Base & { type: "error"; message: string })
   | (Base & {
@@ -86,6 +122,8 @@ export interface SessionDetail extends SessionSummary {
   settings: AgentSettings;
   events: AgentEvent[];
   usage: Usage;
+  active_agent: { name: string; title: string }; // who answers now (after a handoff)
+  board?: BoardState; // only while an agent with a chess board is answering
 }
 
 export interface ServerConfig {

@@ -52,40 +52,40 @@ function AttachmentView({ item }: { item: Attachment }) {
     return item.mime === "text/html" ? (
       <div className="attachment table-html" dangerouslySetInnerHTML={{ __html: item.data }} />
     ) : (
-      <div className="attachment">
-        <Markdown text={item.data} />
-      </div>
-    );
-  }
-  if (item.kind === "file" && item.url) {
-    return (
-      <a className="attachment file" href={item.url} download>
-        Download {item.title ?? "file"}
-      </a>
-    );
-  }
-  return <pre className="attachment code">{item.data}</pre>;
-}
-
-function ToolRow({ run }: { run: ToolRun }) {
-  const [open, setOpen] = useState(false);
-  const running = run.result === undefined;
-  const status = running ? "running" : run.isError ? "error" : "ok";
-  // Downloadable files are listed once under the turn's answer instead.
-  const inline = run.attachments.filter((a) => !(a.kind === "file" && a.url));
-  return (
-    <div className={`tool tool-${status}`}>
-      <button className="tool-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="tool-name">{run.name}</span>
-        <span className="tool-args">{argsPreview(run.args)}</span>
-        <span className="tool-status">
-          {running ? "running" : run.isError ? "failed" : formatDuration(run.durationMs ?? 0)}
-        </span>
-      </button>
-      {running && run.progress && (
-        <div className="tool-progress" aria-live="polite">
-          {run.progress}
+        <div className="attachment">
+          <Markdown text={item.data} />
         </div>
+      );
+    }
+    if (item.kind === "file" && item.url) {
+      return (
+        <a className="attachment file" href={item.url} download>
+          Download {item.title ?? "file"}
+        </a>
+      );
+    }
+    return <pre className="attachment code">{item.data}</pre>;
+  }
+
+  function ToolRow({ run }: { run: ToolRun }) {
+    const [open, setOpen] = useState(false);
+    const running = run.result === undefined;
+    const status = running ? "running" : run.isError ? "error" : "ok";
+    // Downloadable files are listed once under the turn's answer instead.
+    const inline = run.attachments.filter((a) => !(a.kind === "file" && a.url));
+    return (
+      <div className={`tool tool-${status}`}>
+        <button className="tool-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+          <span className="tool-name">{run.name}</span>
+          <span className="tool-args">{argsPreview(run.args)}</span>
+          <span className="tool-status">
+            {running ? "running" : run.isError ? "failed" : formatDuration(run.durationMs ?? 0)}
+          </span>
+        </button>
+        {running && run.progress && (
+          <div className="tool-progress" aria-live="polite">
+            {run.progress}
+          </div>
       )}
       {open && (
         <div className="tool-body">
@@ -133,7 +133,7 @@ const STOP_MESSAGES: Record<string, string> = {
   error: "The turn failed.",
 };
 
-export function TurnView({ turn, live }: { turn: Turn; live: boolean }) {
+export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean; agentTitle?: string }) {
   const lastStep = turn.steps[turn.steps.length - 1];
   // Steps that called tools form the trace; a step without tool calls is the answer.
   const traced = turn.steps.filter((s) => s.hasToolCalls || (s !== lastStep && s.text));
@@ -148,22 +148,28 @@ export function TurnView({ turn, live }: { turn: Turn; live: boolean }) {
   const files = turnFiles(turn);
 
   return (
-    <article className="turn">
-      <div className="user-msg">
-        <div className="user-bubble">
-          {turn.userMessage}
-          {turn.userFiles.length > 0 && (
-            <div className="bubble-files">
-              {turn.userFiles.map((path) => (
-                <span key={path} className="bubble-file">
-                  <FileIcon />
-                  {path.split("/").pop()}
-                </span>
-              ))}
-            </div>
-          )}
+    <article className={`turn ${turn.via ? "is-handoff" : ""}`}>
+      {turn.via ? (
+        <div className="handoff-divider" role="note">
+          <span>{agentTitle ?? turn.agent} joined</span>
         </div>
-      </div>
+      ) : (
+        <div className="user-msg">
+          <div className="user-bubble">
+            {turn.userMessage}
+            {turn.userFiles.length > 0 && (
+              <div className="bubble-files">
+                {turn.userFiles.map((path) => (
+                  <span key={path} className="bubble-file">
+                    <FileIcon />
+                    {path.split("/").pop()}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div className="agent-msg">
         {(traced.length > 0 || showThinkingNode) && (
           <ol className="trace">

@@ -61,6 +61,9 @@ class ToolResult:
     content: str  # what the model sees
     attachments: list[Attachment] = field(default_factory=list)  # what the UI shows
     is_error: bool = False
+    # End the turn right after this call, with ``content`` as the final answer (no further
+    # model call). Used by ``handoff``: the next agent answers instead.
+    end_turn: bool = False
 
 
 class ToolError(Exception):

@@ -23,6 +23,8 @@ export interface Step {
 
 export interface Turn {
   index: number;
+  agent: string; // the agent that answered this turn
+  via: string | null; // set when another agent handed the message over (no new user message)
   userMessage: string;
   userFiles: string[]; // files attached to the message, e.g. "data/titanic.csv"
   model: string;
@@ -73,6 +75,8 @@ export function buildTurns(events: AgentEvent[]): Turn[] {
       const { text, files } = splitAttachments(event.user_message);
       const turn: Turn = {
         index: event.turn,
+        agent: event.agent,
+        via: event.via ?? null,
         userMessage: text,
         userFiles: files,
         model: event.model,

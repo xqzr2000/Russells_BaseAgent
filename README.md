@@ -61,6 +61,7 @@ class DataScienceAgent(BaseAgent):
 | **Coordinator** (default) | Your main chat. Answers simple things itself and delegates specialized work to any agent marked `delegatable`. |
 | **Data scientist** | Basic EDA in a Jupyter kernel: rows and columns, types, missing values, unique values, duplicates, summary statistics. Returns a summary and a downloadable `.ipynb`. |
 | **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
+| **Chess coach** | Say *let's play chess* or *teach me chess* in the main chat and the coordinator hands the chat to the coach. It teaches on a board pinned above the chat (positions, arrows, dots, attacked squares) and plays easy games (you're White). In progress, see [docs/CHESS_COACH_PLAN.md](docs/CHESS_COACH_PLAN.md). |
 
 ### EDA on a CSV
 

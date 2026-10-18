@@ -15,6 +15,7 @@ Override these (all optional):
     is_final(message)            when a turn is finished
     format_observation(result)   how a tool result is shown to the model
     output_files()               files it produced for the user to download
+    ui_state()                   live state the UI draws (e.g. a chess board)
 
 Rule for subclasses: ``__init__`` only stores options. Anything that needs
 I/O or depends on subclass state belongs in ``setup()``, which the loop awaits
@@ -78,6 +79,9 @@ class BaseAgent:
     examples: ClassVar[list[str]] = []  # starter prompts shown in the chat room
     skills_dir: ClassVar[str | Path | None] = None
     delegatable: ClassVar[bool] = False  # offered to the coordinator's `delegate` tool
+    # Offered to the coordinator's `handoff` tool: the chat switches to this agent, which then
+    # talks with the user directly (for interactive work such as chess lessons).
+    handoff_target: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -106,6 +110,9 @@ class BaseAgent:
         self._skills = SkillLibrary()
         self._ready = False
         self._last_prompt_tokens: tuple[int, int] | None = None  # (actual, rough)
+        # Set by the session when another agent handed the chat to this one; adds `handoff_back`.
+        self.handoff_parent: tuple[str, str] | None = None  # (name, title)
+        self._end_turn: str | None = None
 
     # ------------------------------------------------------------------ hooks
 
@@ -141,6 +148,13 @@ class BaseAgent:
         """Files this agent has produced for the user (shown as downloads after a delegation)."""
         return []
 
+    def ui_state(self) -> dict[str, Any]:
+        """Extra live state the chat room draws besides messages (e.g. ``{"board": ...}``).
+
+        Included in the session detail so a reopened chat shows it again.
+        """
+        return {}
+
     # ------------------------------------------------------------- lifecycle
 
     async def ensure_ready(self) -> None:
@@ -151,6 +165,10 @@ class BaseAgent:
         tools = list(self.get_tools())
         if self._skills:
             tools.append(self._skills.as_tool())
+        if self.handoff_parent:
+            from baseagent.handoff import handoff_back
+
+            tools.append(handoff_back)
         self._tools = {}
         for t in tools:
             if t.name in self._tools:
@@ -166,6 +184,9 @@ class BaseAgent:
         prompt = self.system_prompt()
         if self._skills:
             prompt += "\n\n" + self._skills.catalog_prompt()
+        if self.handoff_parent:
+            prompt += (f"\n\nThe {self.handoff_parent[1]} handed this chat to you. If the user "
+                       "wants something outside your speciality, call `handoff_back`.")
         return prompt
 
     def build_prompt(self) -> list[dict[str, Any]]:
@@ -178,14 +199,18 @@ class BaseAgent:
 
     # ---------------------------------------------------------- the loop
 
-    async def run(self, user_message: str) -> TurnResult:
-        """Handle one user message: loop model → tools → model until final."""
+    async def run(self, user_message: str, via: str | None = None) -> TurnResult:
+        """Handle one user message: loop model → tools → model until final.
+
+        ``via`` names the agent that handed this message over, if any.
+        """
 
         await self.ensure_ready()
         self.turn += 1
         turn = self.turn
+        self._end_turn = None
         await self.emit(ev.TurnStart(turn=turn, user_message=user_message,
-                                     model=self.settings.model, agent=self.name))
+                                     model=self.settings.model, agent=self.name, via=via))
         self.memory.add({"role": "user", "content": user_message})
 
         steps, usage, final_text, stop_reason = 0, ev.Usage(), "", "final"
@@ -228,6 +253,10 @@ class BaseAgent:
                     continue
                 for observation in await self.execute_tool_calls(calls, turn, steps):
                     self.memory.add(observation)
+                if self._end_turn is not None:  # e.g. a handoff: the next agent answers
+                    final_text, self._end_turn = self._end_turn, None
+                    self.memory.add({"role": "assistant", "content": final_text})
+                    break
         except asyncio.CancelledError:
             self.memory.repair("The user stopped the turn before this call ran.")
             stop_reason, final_text = "cancelled", "(Stopped by the user.)"
@@ -289,6 +318,8 @@ class BaseAgent:
             else:
                 result = await self.run_tool(tool, arguments, call["id"], turn, step)
             content = self.format_observation(result)
+            if result.end_turn and not result.is_error:
+                self._end_turn = result.content
             await self.emit(ev.ToolEnd(
                 turn=turn, step=step, call_id=call["id"], name=name, content=content,
                 is_error=result.is_error, attachments=result.attachments,

@@ -11,12 +11,17 @@ from baseagent.agent import BaseAgent
 from baseagent.agents import register_agent
 from baseagent.builtin_tools import calculator, current_time
 from baseagent.delegation import SubAgentPool, make_delegate_tool
+from baseagent.handoff import handoff_targets, make_handoff_tool
 
 SYSTEM_PROMPT = """\
 You are the coordinator in Russell's BaseAgent chat room. You talk with the user and \
 route specialized work to specialist agents with the `delegate` tool.
 
-- When a request matches a specialist's description, delegate it. The specialist cannot \
+- When the user wants to learn or play chess ("teach me chess", "let's play chess", "how does \
+the knight move?"), call `handoff` with agent "chess_coach" right away and don't answer it \
+yourself: the coach shows a board and answers in this same reply. Use `handoff` for every \
+specialist listed in its description; those talk with the user directly.
+- When a request matches a `delegate` specialist's description, delegate it. The specialist cannot \
 see this conversation: write a complete task with exact file paths as they appear in the \
 user's message (e.g. data/titanic.csv), what to do, and any preferences the user stated.
 - Files the user attached are listed at the end of their message. If a request needs a \
@@ -34,9 +39,11 @@ class CoordinatorAgent(BaseAgent):
     title = "Coordinator"
     description = (
         "Your main chat. Answers simple questions itself and hands specialized work to the "
-        "right agent. Drag a CSV into the chat and ask for EDA to get a Jupyter notebook back."
+        "right agent. Drag a CSV into the chat and ask for EDA to get a Jupyter notebook back, "
+        "or say \"let's play chess\" to bring in the chess coach."
     )
-    examples = ["What can you do?", "What is 12 * (3 + 4)^2 / 7?"]
+    examples = ["What can you do?", "Let's play chess", "Teach me chess. I've never played.",
+                "What is 12 * (3 + 4)^2 / 7?"]
     default_settings = {"max_steps": 10}
 
     def __init__(self, *args, **kwargs):
@@ -50,4 +57,8 @@ class CoordinatorAgent(BaseAgent):
         return SYSTEM_PROMPT
 
     def get_tools(self):
-        return [calculator, current_time, make_delegate_tool(self.subagents.available())]
+        tools = [calculator, current_time, make_delegate_tool(self.subagents.available())]
+        targets = handoff_targets(exclude=type(self))
+        if targets:
+            tools.append(make_handoff_tool(targets))
+        return tools
