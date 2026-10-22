@@ -15,6 +15,7 @@ dependencies = [
     "ipykernel>=7.4.0",
     "nbformat>=5.11.1",
     "chess>=1.11",
+    "agent-sandbox-runtime==0.1.0",  # packages/agent-sandbox-runtime: Docker sandboxes for the code agent
 ]
 
 [project.scripts]
@@ -43,6 +44,12 @@ dev = [
 [tool.uv]
 default-groups = ["dev", "datascience"]  # `uv sync` installs both
 
+[tool.uv.sources]
+agent-sandbox-runtime = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/agent-sandbox-runtime"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -51,7 +58,9 @@ build-backend = "hatchling.build"
 packages = ["src/baseagent"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages/agent-sandbox-runtime/tests"]
+markers = ["docker: needs a running Docker daemon and the sandbox images (make sandbox-images)"]
+addopts = "-m 'not docker'"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 

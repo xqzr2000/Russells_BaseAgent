@@ -13,6 +13,13 @@ uv sync                          # Python deps (incl. the data science kernel's)
 (cd web && npm ci)               # UI deps from web/package-lock.json
 if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi
 
+# The code agent's sandbox images (needs Docker; safe to re-run later).
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  make sandbox-images || echo "Building the sandbox images failed; run 'make sandbox-images' later."
+else
+  echo "Docker isn't ready yet; run 'make sandbox-images' before using the code agent."
+fi
+
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   echo "OPENAI_API_KEY found in the environment."
 else

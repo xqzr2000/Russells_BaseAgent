@@ -13,6 +13,27 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "agent-sandbox-runtime",
+    "russells-baseagent",
+]
+
+[[package]]
+name = "agent-sandbox-runtime"
+version = "0.1.0"
+source = { editable = "packages/agent-sandbox-runtime" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.0" }]
+
 [[package]]
 name = "annotated-doc"
 version = "0.0.5"
@@ -1817,6 +1838,7 @@ name = "russells-baseagent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agent-sandbox-runtime" },
     { name = "chess" },
     { name = "fastapi" },
     { name = "ipykernel" },
@@ -1849,6 +1871,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-sandbox-runtime", editable = "packages/agent-sandbox-runtime" },
     { name = "chess", specifier = ">=1.11" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "ipykernel", specifier = ">=7.4.0" },

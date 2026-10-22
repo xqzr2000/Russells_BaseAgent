@@ -1,4 +1,4 @@
-.PHONY: setup dev server web test typecheck check build serve clean
+.PHONY: setup dev server web test typecheck check build serve clean sandbox-images test-docker
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -15,6 +15,12 @@ web:              ## chat room only (port 5173)
 
 test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
+
+sandbox-images:   ## build the code agent's sandbox images (needs Docker)
+	docker build -t baseagent-runner:1 docker/runner
+
+test-docker:      ## code-runner tests against real containers (after make sandbox-images)
+	uv run pytest -q -m docker tests/test_code_runner.py
 
 typecheck:        ## TypeScript type check for the UI
 	cd web && npm run typecheck

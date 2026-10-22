@@ -10,6 +10,8 @@
     POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
     POST /api/sessions/{id}/chess/rewind   step back a move or restart the lesson position
     GET  /api/agents | /api/models | /api/config
+    POST /internal/code-runs           the code agent's sandboxed OpenCode runs a snippet
+                                       (one-time bearer token; not proxied by the web UI)
 
 In production (``make serve``) it also serves the built web UI from web/dist.
 """
@@ -35,6 +37,7 @@ from pydantic import BaseModel, Field
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
 from baseagent.chess import ChessError, ChessSession
+from baseagent.codeagent import BridgeError, RunBridge, RunRequest
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
@@ -98,7 +101,7 @@ def default_model() -> str:
 
 
 def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
-               workspace_dir: Path | None = None) -> FastAPI:
+               workspace_dir: Path | None = None, code_bridge: RunBridge | None = None) -> FastAPI:
     load_dotenv(ROOT / ".env")  # never overrides real env vars such as Codespaces secrets
     manager = SessionManager(llm or RoutingLLM(), log_dir or ROOT / "runs",
                              workspace_dir or WORKSPACE_DIR)
@@ -112,6 +115,7 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
 
     app = FastAPI(title="Russell's BaseAgent", lifespan=lifespan)
     app.state.manager = manager
+    app.state.code_bridge = bridge = code_bridge or RunBridge()
 
     def session_or_404(session_id: str) -> Session:
         try:
@@ -133,6 +137,16 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
     @app.get("/api/health")
     async def health():
         return {"ok": True}
+
+    @app.post("/internal/code-runs")
+    async def code_run(body: RunRequest, request: Request):
+        auth = request.headers.get("authorization", "")
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else None
+        try:
+            result = await bridge.handle(token, body)
+        except BridgeError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
+        return result.to_dict()
 
     @app.get("/api/config")
     async def config():
