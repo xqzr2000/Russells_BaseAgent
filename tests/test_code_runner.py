@@ -9,7 +9,7 @@ import pytest
 
 from baseagent.codeagent import CodeRunner, RunBridge, RunLimits, RunRequest
 from baseagent.codeagent.bridge import BridgeError
-from baseagent.codeagent.runner import classify, trim
+from baseagent.codeagent.runner import RUN_ENV, classify, clean_env_argv, trim
 from baseagent.llm import ScriptedLLM
 from baseagent.server.app import create_app
 
@@ -63,7 +63,7 @@ def test_run_python_is_locked_down_and_cleaned_up():
     assert options["memory"] == "512m" and options["pids_limit"] == 64
     assert options["read_only"] is True and options["user"] == "1000:1000"
     assert sandbox.files == {"/work/main.py": "print(sum(range(10)))"}
-    assert sandbox.commands == [(["python", "-I", "-B", "main.py"], "hi")]
+    assert sandbox.commands == [(clean_env_argv(["python", "-I", "-B", "main.py"]), "hi")]
     assert sandbox.stopped
 
 
@@ -73,6 +73,14 @@ def test_no_secrets_reach_the_runner(monkeypatch):
     sandbox = FakeSandbox.instances[0]
     assert "sk-should-not-leak" not in repr(sandbox.options)
     assert "env" not in sandbox.options
+
+
+def test_code_runs_with_a_clean_environment():
+    runner().run("python", "print(1)")
+    command, _ = FakeSandbox.instances[0].commands[0]
+    assert command[:2] == ["env", "-i"]
+    assert command[2:2 + len(RUN_ENV)] == [f"{k}={v}" for k, v in RUN_ENV.items()]
+    assert not any("KEY" in k or "TOKEN" in k or "SECRET" in k for k in RUN_ENV)
 
 
 def test_check_stops_at_the_first_failing_step():
@@ -232,10 +240,12 @@ def test_docker_read_only_and_no_secrets():
             "    print('WROTE')\n"
             "except OSError:\n"
             "    print('read-only')\n"
-            "print('keys:', [k for k in os.environ if 'KEY' in k or 'TOKEN' in k])\n"
+            "print('env:', sorted(os.environ))\n"
             "print('user:', os.getuid())\n")
     result = real_runner().run("python", code)
-    assert "read-only" in result.stdout and "keys: []" in result.stdout, result
+    assert "read-only" in result.stdout, result
+    # Only the variables the runner passes in; nothing inherited from the images.
+    assert f"env: {sorted(RUN_ENV)}" in result.stdout, result
     assert "user: 1000" in result.stdout
 
 

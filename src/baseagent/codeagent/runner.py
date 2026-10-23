@@ -5,6 +5,8 @@ starts a fresh container from the runner image (``docker/runner/Dockerfile``)
 and deletes it afterwards:
 
 * no network, read-only file system, non-root user, no API keys
+* the code sees only the environment variables in ``RUN_ENV`` (``env -i``), not
+  whatever the base images define
 * 512 MB of memory with no swap, 1 CPU, at most 64 processes
 * ``run`` stops after 10 s; ``check`` (syntax check and lint) after 30 s
 * a run that prints more than 1 MB is stopped (usually a printing endless loop)
@@ -59,6 +61,25 @@ COMMANDS: dict[str, dict[str, list[list[str]]]] = {
         "run": [["tsx", "main.ts"]],
     },
 }
+
+# The complete environment the user's code runs with. Everything else the image
+# defines (e.g. the python image's GPG_KEY) is dropped by `env -i`.
+RUN_ENV = {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "HOME": "/tmp",
+    "LANG": "C.UTF-8",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1",
+    "MPLBACKEND": "Agg",
+    "MPLCONFIGDIR": "/tmp/matplotlib",
+    "NODE_OPTIONS": "--max-old-space-size=384",
+}
+
+
+def clean_env_argv(step: list[str]) -> list[str]:
+    """``env -i K=V ... <step>``: run ``step`` with exactly ``RUN_ENV``."""
+    return ["env", "-i", *(f"{key}={value}" for key, value in RUN_ENV.items()), *step]
+
 
 OOM_MARKERS = ("MemoryError", "JavaScript heap out of memory", "Cannot allocate memory")
 
@@ -159,7 +180,7 @@ class CodeRunner:
             note, exit_code = "", 0
             for step in steps:
                 started = time.monotonic()
-                out = sandbox.execute(step, shell=False, timeout=timeout,
+                out = sandbox.execute(clean_env_argv(step), shell=False, timeout=timeout,
                                       stdin=stdin if mode == "run" else None,
                                       output_limit=limits.max_output_bytes)
                 elapsed = time.monotonic() - started
