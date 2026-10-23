@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -12,8 +13,12 @@ class DockerError(RuntimeError):
 
 
 def docker(*args: str, timeout: float | None = 120, check: bool = True,
-           input: str | None = None, output_limit: int | None = None) -> subprocess.CompletedProcess[str]:
+           input: str | None = None, output_limit: int | None = None,
+           env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the Docker CLI.
+
+    ``env`` adds variables to the docker client's own environment, e.g. for
+    ``--env NAME`` (value taken from the client, so it never appears in argv).
 
     With ``output_limit`` (bytes, stdout and stderr together) the output is read
     as it arrives and the client is killed once the limit is passed; the
@@ -26,7 +31,7 @@ def docker(*args: str, timeout: float | None = 120, check: bool = True,
     try:
         result = subprocess.run(
             ["docker", *args], capture_output=True, text=True, timeout=timeout, input=input,
-            errors="replace",
+            errors="replace", env={**os.environ, **env} if env else None,
         )
     except subprocess.TimeoutExpired as exc:
         raise DockerError(f"Docker command timed out after {timeout}s: {args[0] if args else ''}") from exc

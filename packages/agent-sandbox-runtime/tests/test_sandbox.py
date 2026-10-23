@@ -49,3 +49,24 @@ def test_no_remote_public_host_ports():
 def test_rejects_unsafe_argv():
     with pytest.raises(ValueError):
         Sandbox("python:3.12", ports=[99999])
+
+
+def test_spawn_keeps_secrets_off_the_command_line():
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "run":
+            return result("cid\n")
+        if args[0] == "inspect":
+            return result("true\n")
+        return result()
+
+    with patch("agent_sandbox_runtime.sandbox.docker", side_effect=fake):
+        with Sandbox("img", deployment_timeout=100) as sb:
+            sb.spawn(["server", "--port", "1"], env={"PASSWORD": "s3cret"}, cwd="/w")
+    args, kwargs = next(c for c in calls if c[0][0] == "exec")
+    assert "--detach" in args and "PASSWORD" in args
+    assert not any("s3cret" in a for a in args)
+    assert kwargs["env"] == {"PASSWORD": "s3cret"}
+    assert args[-3:] == ("server", "--port", "1")

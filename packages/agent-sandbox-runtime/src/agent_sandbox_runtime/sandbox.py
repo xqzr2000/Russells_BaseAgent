@@ -194,6 +194,26 @@ class Sandbox:
             output["exception_info"] = f"Command timed out after {effective_timeout}s"
         return output
 
+    def spawn(self, command: list[str], *, cwd: str | None = None,
+              env: Mapping[str, str] | None = None) -> None:
+        """Start a long-running process in the background (``docker exec --detach``).
+
+        It runs until it exits or the sandbox stops; use ``execute`` to talk to
+        it (or a published port). ``env`` is visible only to this process, and
+        its values are passed through the docker client's environment
+        (``--env NAME``), so secrets never appear on a command line.
+        """
+        if not self.is_alive():
+            raise SandboxError("Sandbox is no longer running")
+        if not isinstance(command, (list, tuple)) or not command:
+            raise ValueError("spawn needs a nonempty argv list")
+        argv = ["exec", "--detach", "--workdir", cwd or self.cwd]
+        for key in env or {}:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(f"Invalid environment variable name: {key}")
+            argv += ["--env", key]
+        docker(*argv, self.id, *command, timeout=30, env=dict(env or {}))
+
     def write_file(self, path: str, text: str, *, timeout: float = 30) -> None:
         """Write a text file in the container, as the container's user.
 

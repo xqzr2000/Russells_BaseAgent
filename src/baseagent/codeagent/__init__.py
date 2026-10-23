@@ -3,6 +3,8 @@
 * ``runner``: runs a snippet in a throwaway container with no network
 * ``bridge``: the token-protected door OpenCode's ``run_code`` tool calls to
   reach the runner, with a per-request run log and run cap
+* ``opencode_config``: what OpenCode's ``fixer`` agent may do, the answer
+  schema, and the free-model choice
 """
 
 from baseagent.codeagent.bridge import BridgeError, RunBridge, RunRequest, Ticket
