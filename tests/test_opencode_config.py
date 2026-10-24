@@ -98,6 +98,8 @@ def test_mode_instructions():
     assert "# TEST: added to show it works" in test and "at most 6" in test
     assert "{verification}" not in auto and "{runs}" not in test
     assert "Don't run the user's original code" in auto
+    assert "Fix only real bugs" in auto and "Don't add defensive extras" in auto
+    assert "Tips are not fixes and not defensive extras" in auto
     with pytest.raises(ValueError):
         fixer_prompt("yolo")
 
@@ -110,7 +112,8 @@ def test_dockerfile_sets_the_image_env():
 
 
 def test_answer_schema_requires_issues_and_summary():
-    assert ANSWER_SCHEMA["required"] == ["issues", "summary", "not_run_reason"]
+    assert ANSWER_SCHEMA["required"] == ["issues", "summary", "not_run_reason", "tips"]
+    assert ANSWER_SCHEMA["properties"]["tips"]["maxItems"] == 3
     item = ANSWER_SCHEMA["properties"]["issues"]["items"]
     assert item["required"] == ["line", "problem", "fix"]
 
@@ -192,7 +195,7 @@ def test_real_opencode_fixer_tools_and_run_code(tmp_path):
         {"tool_calls": [("StructuredOutput", {
             "issues": [{"line": 1, "problem": "missing ':'", "fix": "added ':'"},
                        {"line": 4, "problem": "'=+'", "fix": "'+='"}],
-            "summary": "fixed", "not_run_reason": ""})]},
+            "summary": "fixed", "not_run_reason": "", "tips": []})]},
     ]
     with FakeOpenAI(script) as fake:
         config = build_config("deepseek-v4.1-flash-free")

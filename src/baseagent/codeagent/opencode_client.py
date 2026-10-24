@@ -37,6 +37,7 @@ from baseagent.codeagent.opencode_config import (
     ANSWER_SCHEMA, FIXER_AGENT, RUN_LIMITS, Mode, NoFreeModel, build_config, parse_model_list,
     pick_model,
 )
+from baseagent.codeagent.language import guess_language
 from baseagent.codeagent.runner import RunResult, normalize_language
 
 OPENCODE_IMAGE = os.environ.get("BASEAGENT_OPENCODE_IMAGE", "baseagent-opencode:1")
@@ -70,7 +71,7 @@ class CodeAgentError(RuntimeError):
 class CodeTask:
     code: str
     request: str = "Check this code and fix what is wrong."  # what the user asked, in their words
-    language: str | None = None  # e.g. "python"; guessed from filename if missing
+    language: str | None = None  # e.g. "python"; from the file name, else guessed from the code
     filename: str | None = None  # e.g. "main.py" (only the name is used)
     mode: Mode = "auto"
 
@@ -86,6 +87,7 @@ class CodeFix:
     issues: list[dict[str, Any]] = field(default_factory=list)
     summary: str = ""
     not_run_reason: str = ""
+    tips: list[str] = field(default_factory=list)  # learning points, not fixes
     runs: list[RunResult] = field(default_factory=list)
     model: str = ""
     zero_retention: bool = True
@@ -98,12 +100,13 @@ def resolve_file(task: CodeTask) -> tuple[str, str, bool]:
     """(file name, code-fence language, runnable) for a task."""
     name = PurePosixPath((task.filename or "").replace("\\", "/")).name
     name = re.sub(r"[^\w.\-]+", "_", name).strip("._")
-    lang = (task.language or "").strip().lower()
+    lang = (task.language or "").strip().lower() or (guess_language(task.code) or "")
     if name and "." in name:
         ext = "." + name.rsplit(".", 1)[1].lower()
     else:
         runnable_lang = normalize_language(lang) if lang else None
-        ext = EXTENSIONS.get(runnable_lang or lang, ".py" if not lang else ".txt")
+        # Unknown language: a .txt file, reviewed but not run (never assume Python).
+        ext = EXTENSIONS.get(runnable_lang or lang, ".txt")
         name = f"{name or 'main'}{ext}"
     fence = FENCES.get(ext, ext.lstrip("."))
     runnable = ext in (".py", ".js", ".mjs", ".cjs", ".ts")
@@ -317,6 +320,7 @@ class OpenCodeFixer:
             result.issues = [i for i in structured.get("issues") or [] if isinstance(i, dict)]
             result.summary = str(structured.get("summary") or "")
             result.not_run_reason = str(structured.get("not_run_reason") or "")
+            result.tips = [str(t).strip() for t in structured.get("tips") or [] if str(t).strip()][:3]
         error = info.get("error")
         if error and not result.stopped:
             data = error.get("data") or {}

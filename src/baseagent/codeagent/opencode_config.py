@@ -88,6 +88,10 @@ directory). Your job: find what is wrong, fix it with the smallest possible chan
 explain each fix.
 
 Rules
+- Fix only real bugs: code that fails, or gives the wrong result for what it is meant to do \
+(read the comments and task description in the code). Nothing else counts as an issue.
+- Don't add defensive extras: null or undefined checks, radix arguments, try/except or \
+try/catch, input validation, type checks or fallbacks, unless their absence IS the bug.
 - Keep the user's style, names and structure. Change only what is needed to make the code \
 correct. Do not reformat, rename or "improve" anything else.
 - Edit the file in place. Do not create other files.
@@ -102,8 +106,11 @@ why it would not stop.
 {verification}
 
 Finish with your structured answer: the issues (line numbers in the ORIGINAL code, in the \
-same order as your FIX numbers), a one-sentence summary, and not_run_reason (why the fixed \
-code was not run, or "" if it was run)."""
+same order as your FIX numbers), a one-sentence summary, not_run_reason (why the fixed \
+code was not run, or "" if it was run), and tips: up to 3 short learning points about this \
+code for someone learning to program (why the bug happened, the language rule behind it, a \
+clearer way to write the same thing). Tips are not fixes and not defensive extras; use [] \
+when there is nothing worth adding."""
 
 VERIFICATION: dict[str, str] = {
     "review": """\
@@ -155,8 +162,10 @@ ANSWER_SCHEMA: dict = {
         "summary": {"type": "string", "description": "One sentence about the code and the result."},
         "not_run_reason": {"type": "string",
                            "description": "Why the fixed code was not run, or \"\" if it was run."},
+        "tips": {"type": "array", "maxItems": 3, "items": {"type": "string"},
+                 "description": "Up to 3 short learning points (not fixes, not defensive extras)."},
     },
-    "required": ["issues", "summary", "not_run_reason"],
+    "required": ["issues", "summary", "not_run_reason", "tips"],
     "additionalProperties": False,
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
+import { fenceIfCode } from "./codeLanguage";
 import { ChessPanel } from "./components/ChessPanel";
 import { FileIcon, formatSize } from "./components/FileIcon";
 import { Meadow, firstImpression, jackForced } from "./components/Meadow";
@@ -524,6 +525,21 @@ export default function App() {
                 setDraft(e.target.value);
                 // Jack's first impression starts on the first keystroke of a fresh chat.
                 if (jack === "armed" && e.target.value && !hasChat) setJack("playing");
+              }}
+              onPaste={(e) => {
+                // Pasted code goes into a ``` block with its language, so the code agent
+                // reads it exactly as pasted.
+                const fenced = fenceIfCode(e.clipboardData.getData("text/plain"));
+                if (!fenced) return;
+                e.preventDefault();
+                const el = e.currentTarget;
+                const before = draft.slice(0, el.selectionStart);
+                const after = draft.slice(el.selectionEnd);
+                const head = before + (before && !before.endsWith("\n") ? "\n" : "") + fenced + "\n";
+                const next = head + after.replace(/^\n/, "");
+                setDraft(next);
+                if (jack === "armed" && !hasChat) setJack("playing");
+                requestAnimationFrame(() => el.setSelectionRange(head.length, head.length));
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

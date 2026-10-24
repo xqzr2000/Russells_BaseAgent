@@ -71,7 +71,7 @@ async def fix_code(mode: Literal["review", "auto", "test"] = "auto", question: s
         question: The user's request in their words.
         file: An attached file's path, e.g. data/main.py. Empty for a code block.
         block: Which ``` block in their latest message: 1 = first, 0 = last.
-        language: Only if the code block has no language tag.
+        language: The language when the code has no ``` language tag (e.g. pasted without fences).
         code: Only for code pasted without ``` fences: the code, copied exactly.
     """
     message = latest_user_message(ctx.agent.memory.history)

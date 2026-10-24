@@ -10,6 +10,9 @@
 
     **Ran:** printed `45`
 
+    **Tips**
+    - `=+` is two operators: `=` then unary `+`. ...
+
     *Fixed by OpenCode with the free model deepseek-v4.1-flash-free.*
 
 The verification line ("Ran", "Checked only", "Reviewed only") comes from the
@@ -119,6 +122,8 @@ def build_answer(fix: CodeFix) -> str:
     if fix.summary and fix.issues:
         parts.append(fix.summary)
     parts.append(verification(fix))
+    if fix.tips:
+        parts.append("**Tips**\n" + "\n".join(f"- {tip}" for tip in fix.tips))
     if fix.model:
         privacy = "" if fix.zero_retention else " (this free model may use what it's sent for training)"
         parts.append(f"*{'Fixed' if changed else 'Checked'} by OpenCode with the free model {fix.model}{privacy}.*")

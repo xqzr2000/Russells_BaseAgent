@@ -75,7 +75,8 @@ def test_endless_loop_is_fixed_and_verified():
         {"tool_calls": [("run_code", {"path": "main.py", "mode": "run", "stdin": ""})]},
         {"tool_calls": [("StructuredOutput", {
             "issues": [{"line": 2, "problem": "i never changes, so the loop never ends.", "fix": "Added i += 1."}],
-            "summary": "The loop now stops after printing 0, 1 and 2.", "not_run_reason": ""})]},
+            "summary": "The loop now stops after printing 0, 1 and 2.", "not_run_reason": "",
+            "tips": ["A while loop only stops when its condition changes inside the loop."]})]},
     ]
     fix, progress, fake = fix_with(script, CodeTask(LOOP, request="Why doesn't this stop?"))
     assert fix.answered and fix.stopped is None, fix
@@ -84,6 +85,7 @@ def test_endless_loop_is_fixed_and_verified():
     answer = build_answer(fix)
     assert "1. Line 2: i never changes" in answer
     assert "**Ran:** printed \n```text\n0\n1\n2\n```" in answer
+    assert "**Tips**\n- A while loop only stops when its condition changes inside the loop." in answer
     assert "running main.py" in progress and "run result: ok" in progress
     # The task reached the model with the user's question and code.
     first = fake.requests[0]["messages"]
@@ -95,7 +97,7 @@ def test_review_mode_cannot_run_code():
     script = [
         {"tool_calls": [("run_code", {"path": "main.py", "mode": "run", "stdin": ""})]},
         {"tool_calls": [("StructuredOutput", {"issues": [], "summary": "Looks fine.",
-                                              "not_run_reason": "Reviewed only, as asked."})]},
+                                              "not_run_reason": "Reviewed only, as asked.", "tips": []})]},
     ]
     fix, _, fake = fix_with(script, CodeTask("print('hi')\n", mode="review"))
     assert "run_code" not in fake.tool_names(0)
@@ -147,7 +149,7 @@ def test_chat_message_runs_the_code_agent_end_to_end(tmp_path, monkeypatch):
         {"tool_calls": [("run_code", {"path": "main.py", "mode": "run", "stdin": ""})]},
         {"tool_calls": [("StructuredOutput", {
             "issues": [{"line": 2, "problem": "i never changes.", "fix": "Added i += 1."}],
-            "summary": "Fixed the endless loop.", "not_run_reason": ""})]},
+            "summary": "Fixed the endless loop.", "not_run_reason": "", "tips": []})]},
     ]
     try:
         with FakeOpenAI(script) as fake:

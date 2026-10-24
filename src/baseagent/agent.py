@@ -43,6 +43,8 @@ from baseagent.workspace import Workspace
 
 Emit = Callable[[BaseModel], Awaitable[None]]
 
+NO_MODEL = "none"  # TurnStart.model for a reply_without_model turn
+
 NO_TOOL_CALL_NUDGE = (
     "Your last response neither called a tool nor finished the task. "
     "Continue by calling one of the available tools."
@@ -290,7 +292,7 @@ class BaseAgent:
         self.turn += 1
         turn = self.turn
         await self.emit(ev.TurnStart(turn=turn, user_message=user_message,
-                                     model=self.settings.model, agent=self.name))
+                                     model=NO_MODEL, agent=self.name))
         self.memory.add({"role": "user", "content": user_message})
         await self.emit(ev.StepStart(turn=turn, step=1))
         self.memory.add({"role": "assistant", "content": text})

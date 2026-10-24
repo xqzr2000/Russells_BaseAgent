@@ -144,6 +144,7 @@ async def test_identity_questions_skip_the_model(tmp_path):
     assert result.final_text == IDENTITY_REPLY and llm.requests == []
     end = next(e for e in events if e["type"] == "turn_end")
     assert end["final_text"] == IDENTITY_REPLY and end["usage"]["total_tokens"] == 0
+    assert next(e for e in events if e["type"] == "turn_start")["model"] == "none"
     # A longer question isn't a match, and the model sees the earlier exchange.
     await agent.run("Who are you working for?")
     assert len(llm.requests) == 1
@@ -165,3 +166,12 @@ def test_specialist_lists_use_the_short_briefs():
     tools = {t.name: t.schema()["function"]["description"] for t in agent.get_tools()}
     assert "- data_science: EDA on a tabular data file" in tools["delegate"]
     assert "- chess_coach: Chess lessons and games" in tools["handoff"]
+
+
+async def test_unfenced_code_without_a_language_is_detected(fixer, tmp_path):
+    js = "const a = document.querySelector('#a');\na.textContent = 'x', 1;\n"
+    agent, _, _ = jack([act(call("fix_code", {"code": js}))], tmp_path)
+    await agent.run("check this\n\n" + js)
+    from baseagent.codeagent.opencode_client import resolve_file
+
+    assert resolve_file(fixer.tasks[0])[:2] == ("main.js", "javascript")

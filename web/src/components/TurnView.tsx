@@ -165,7 +165,13 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
       ) : (
         <div className="user-msg">
           <div className="user-bubble">
-            {turn.userMessage}
+            {turn.userMessage.includes("```") ? (
+              <div className="user-markdown">
+                <Markdown text={turn.userMessage} />
+              </div>
+            ) : (
+              turn.userMessage
+            )}
             {turn.userFiles.length > 0 && (
               <div className="bubble-files">
                 {turn.userFiles.map((path) => (
@@ -220,13 +226,14 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
         )}
         {turn.ended && turn.usage && (
           <div className="turn-meta">
-            {turn.usage.total_tokens > 0 ? (
+            {turn.model === "none" ? (
+              "Answered without calling the model"
+            ) : (
               <>
-                {steps} {steps === 1 ? "step" : "steps"}, {turn.usage.total_tokens.toLocaleString()} tokens
+                {steps} {steps === 1 ? "step" : "steps"}
+                {turn.usage.total_tokens > 0 && `, ${turn.usage.total_tokens.toLocaleString()} tokens`}
                 {usageDetail(turn.usage) && ` (${usageDetail(turn.usage)})`}, {turn.model}
               </>
-            ) : (
-              "Answered without calling the model"
             )}
           </div>
         )}

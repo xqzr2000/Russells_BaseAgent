@@ -237,6 +237,14 @@ code, pre, .code { font-family: var(--mono); font-size: 0.86em; }
   padding: 10px 15px; border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* a user message with ``` code (e.g. pasted code, auto-fenced): render it, dark-on-dark */
+.user-markdown { white-space: normal; min-width: 0; }
+.user-markdown .markdown > :first-child { margin-top: 0; }
+.user-markdown .markdown > :last-child { margin-bottom: 0; }
+.user-markdown .markdown pre { background: rgba(255, 255, 255, 0.08); color: inherit; max-width: 100%; }
+.user-markdown .markdown code { color: inherit; background: rgba(255, 255, 255, 0.1); }
+.user-markdown .markdown pre code { background: none; }
+.user-bubble:has(.user-markdown pre) { max-width: min(82%, 720px); width: 100%; }
 .agent-msg { min-width: 0; }
 
 /* the trace rail: one node per step, amber when a step used tools */

@@ -10,6 +10,19 @@ from baseagent.codeagent.runner import RunResult
 ORIGINAL = "def add_up(n)\n    total = 0\n    for i in range(n):\n        total =+ i\n    return total\n"
 FIXED = ("def add_up(n):  # FIX 1: added ':'\n    total = 0\n    for i in range(n):\n"
          "        total += i  # FIX 2: '=+' -> '+='\n    return total\nprint(add_up(10))\n")
+# Russell's first chat-room test: JavaScript pasted without ``` fences.
+CHAR_COUNT = """// ===== YOUR TASK =====
+// Show how many characters remain as the user types in the username field.
+const inputField = document.querySelector('input#username-field');
+const display = document.querySelector('p#char-count');
+
+const maxChars = parseInt(inputField.getAttribute('maxlength'));
+
+function updateRemainingCharacters() {
+    display.textContent = "Remaining characters:", maxChars - inputField.value.length;
+}
+inputField.addEventListener('input', updateRemainingCharacters);
+"""
 ISSUES = [{"line": 1, "problem": "Missing ':' after the def line.", "fix": "Added ':'."},
           {"line": 4, "problem": "'=+' sets total to +i.", "fix": "Changed it to '+='."}]
 
@@ -85,7 +98,9 @@ def test_resolve_file():
     assert resolve_file(CodeTask("x", filename="../../etc/passwd.js")) == ("passwd.js", "javascript", True)
     assert resolve_file(CodeTask("x", language="ts")) == ("main.ts", "typescript", True)
     assert resolve_file(CodeTask("x", language="java")) == ("main.java", "java", False)
-    assert resolve_file(CodeTask("x")) == ("main.py", "python", True)
+    assert resolve_file(CodeTask("x")) == ("main.txt", "", False)  # unknown: never assume Python
+    assert resolve_file(CodeTask(CHAR_COUNT)) == ("main.js", "javascript", True)
+    assert resolve_file(CodeTask(ORIGINAL)) == ("main.py", "python", True)
 
 
 def test_task_message_includes_the_code_and_request():
@@ -120,3 +135,23 @@ def test_failure_without_answer_says_nothing_was_done():
 def test_unchanged_code_is_credited_as_checked():
     answer = build_answer(fix(fixed=ORIGINAL, issues=[], summary="Fine.", runs=[run("run", "ok", ORIGINAL, "x")]))
     assert answer.rstrip().endswith("*Checked by OpenCode with the free model deepseek-v4.1-flash-free.*")
+
+
+def test_tips_are_listed_after_the_verification_line():
+    answer = build_answer(fix(tips=["`=+` is `=` followed by unary `+`.", "`range(n)` stops before n."],
+                              runs=[run("run", "ok", FIXED, "45\n")]))
+    assert answer.index("**Ran:**") < answer.index("**Tips**\n- `=+` is `=` followed by unary `+`.\n- `range(n)`")
+    assert "**Tips**" not in build_answer(fix())
+
+
+def test_language_guesses():
+    from baseagent.codeagent.language import guess_language as g
+
+    assert g(CHAR_COUNT) == "javascript"
+    assert g(ORIGINAL) == "python"  # even with the missing ':'
+    assert g("i = 0\nwhile i < 3:\n    print(i)\n") == "python"
+    assert g("function add(a: number, b: number): number {\n  return a + b;\n}") == "typescript"
+    assert g('public class Main { public static void main(String[] args) { System.out.println(1); } }') == "java"
+    assert g("#include <stdio.h>\nint main(void) { printf(\"hi\"); }") == "c"
+    assert g("package main\nfunc main() { x := 1 }") == "go"
+    assert g("check this please, something is wrong with my loop") is None
