@@ -2,7 +2,7 @@
 
 Point an OpenCode custom provider (``@ai-sdk/openai-compatible``) at
 ``server.base_url``. Each chat request gets the next scripted turn: a list of
-tool calls, or text. Every request body is recorded in ``server.requests``,
+tool calls, or text (optionally after ``delay`` seconds). Every request body is recorded in ``server.requests``,
 so a test can check exactly which tools OpenCode offered the model.
 
     with FakeOpenAI([
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -52,6 +53,8 @@ class FakeOpenAI:
                 with fake.lock:
                     fake.requests.append(body)
                     turn = fake.script.pop(0) if fake.script else {"text": "Done."}
+                if turn.get("delay"):
+                    time.sleep(turn["delay"])  # a slow model (tests the time limit)
                 if body.get("stream"):
                     self._stream(turn)
                 else:

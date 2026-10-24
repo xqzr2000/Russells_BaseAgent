@@ -1,7 +1,16 @@
 """What the code agent's OpenCode is allowed to do, and which free model it uses.
 
 ``build_config()`` returns the JSON passed to ``opencode serve`` as
-``OPENCODE_CONFIG_CONTENT``. It defines one agent, ``fixer``:
+``OPENCODE_CONFIG_CONTENT``. It defines one agent, ``fixer``, for one of three
+verification modes (Jack picks one from the user's wording):
+
+* ``review``: read and fix only; ``run_code`` is denied
+* ``auto`` (default): always check; run only when behaviour matters and the
+  code can run on its own, otherwise say why not
+* ``test``: check and run; if the code only defines functions, add one marked
+  call (``# TEST: ...``) to show it works
+
+The fixer may use:
 
 * allowed: read, edit (edit/write/apply_patch), glob, grep, ``run_code``
   (our tool, docker/opencode/config/tools/run_code.js) and OpenCode's own
@@ -25,6 +34,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 OPENCODE_VERSION = "1.19.2"
 
@@ -44,6 +54,10 @@ IMAGE_ENV = {
 PROVIDER = "opencode"
 FIXER_AGENT = "fixer"
 FIXER_STEPS = 12  # agentic steps before the fixer must answer
+
+Mode = Literal["review", "auto", "test"]
+MODES: tuple[str, ...] = ("review", "auto", "test")
+RUN_LIMITS = {"review": 0, "auto": 4, "test": 6}  # run_code calls per request
 
 # Free models with zero retention and no training (OpenCode Zen docs,
 # checked 2026-10-22), in order of preference.
@@ -79,16 +93,44 @@ correct. Do not reformat, rename or "improve" anything else.
 - Edit the file in place. Do not create other files.
 - On every line you change, add a short comment numbered in order, in the language's comment \
 syntax: `# FIX 1: added ':'` in Python, `// FIX 1: ...` in JavaScript and TypeScript.
-- Use run_code to verify: first mode "check", then mode "run" once it should work. Runs are \
-limited, so don't run the same code twice. If the program reads input, pass stdin.
 - If the code never finishes (an endless loop) or uses too much memory, fix the cause and say \
 why it would not stop.
-- If the language can't be run (anything but Python, JavaScript, TypeScript), review and fix \
-it by reading only, and say it was not run.
 - If the code has no bugs, change nothing and say so.
 
+{verification}
+
 Finish with your structured answer: the issues (line numbers in the ORIGINAL code, in the \
-same order as your FIX numbers), and a one-sentence summary."""
+same order as your FIX numbers), a one-sentence summary, and not_run_reason (why the fixed \
+code was not run, or "" if it was run)."""
+
+VERIFICATION: dict[str, str] = {
+    "review": """\
+Verification: REVIEW ONLY. The user asked you not to run the code, and you can't: read it, \
+fix it and explain. Set not_run_reason to "Reviewed only, as asked.\"""",
+    "auto": """\
+Verification: AUTO.
+- Python, JavaScript and TypeScript: always call run_code with mode "check" on the fixed file.
+- Then call run_code with mode "run" when the result depends on what the code does (loops, \
+printed output, calculations, logic bugs) AND it can run on its own here.
+- Don't run it when it needs things this sandbox doesn't have (input files, network, a GUI, \
+packages that aren't installed, a server that runs forever) or when it only defines functions \
+that nothing calls; say which in not_run_reason.
+- Runs are limited (at most {runs}), so don't run the same code twice. If the program reads \
+input, pass stdin.
+- Other languages can't be run: review only, and say so in not_run_reason.""",
+    "test": """\
+Verification: TEST. The user wants to see it work.
+- Call run_code with mode "check", then mode "run" on the fixed file.
+- If the code only defines functions or classes and nothing calls them, add ONE short call at \
+the end that shows the fix works, marked with a comment: `print(add_up(10))  # TEST: added to \
+show it works` (`// TEST: ...` in JavaScript and TypeScript). Don't number it as a FIX and \
+don't list it as an issue.
+- If it can't run on its own here (input files, network, GUI, missing packages), say why in \
+not_run_reason.
+- Runs are limited (at most {runs}), so don't run the same code twice. If the program reads \
+input, pass stdin.
+- Other languages can't be run: review only, and say so in not_run_reason.""",
+}
 
 # The answer the fixer must return (OpenCode `format: json_schema`).
 ANSWER_SCHEMA: dict = {
@@ -109,15 +151,32 @@ ANSWER_SCHEMA: dict = {
             },
         },
         "summary": {"type": "string", "description": "One sentence about the code and the result."},
+        "not_run_reason": {"type": "string",
+                           "description": "Why the fixed code was not run, or \"\" if it was run."},
     },
-    "required": ["issues", "summary"],
+    "required": ["issues", "summary", "not_run_reason"],
     "additionalProperties": False,
 }
 
 
-def build_config(model: str, *, steps: int = FIXER_STEPS) -> dict:
+def fixer_prompt(mode: Mode = "auto") -> str:
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {', '.join(MODES)}")
+    verification = VERIFICATION[mode].replace("{runs}", str(RUN_LIMITS[mode]))
+    return FIXER_PROMPT.replace("{verification}", verification)
+
+
+def permission_for(mode: Mode = "auto") -> dict[str, str]:
+    rules = dict(PERMISSION)
+    if mode == "review":
+        rules["run_code"] = "deny"  # enforced, not just asked for
+    return rules
+
+
+def build_config(model: str, mode: Mode = "auto", *, steps: int = FIXER_STEPS) -> dict:
     """The OPENCODE_CONFIG_CONTENT for one request, using free model ``model``."""
     full = f"{PROVIDER}/{model}"
+    rules = permission_for(mode)
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": full,
@@ -129,15 +188,15 @@ def build_config(model: str, *, steps: int = FIXER_STEPS) -> dict:
         "formatter": False,
         "lsp": False,
         "snapshot": False,
-        "permission": dict(PERMISSION),
+        "permission": rules,
         "agent": {
             FIXER_AGENT: {
                 "mode": "primary",
                 "description": "Fixes a code snippet for a learner and explains each fix.",
-                "prompt": FIXER_PROMPT,
+                "prompt": fixer_prompt(mode),
                 "steps": steps,
                 "temperature": 0.1,
-                "permission": dict(PERMISSION),
+                "permission": dict(rules),
             },
         },
     }

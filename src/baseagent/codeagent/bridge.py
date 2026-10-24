@@ -14,12 +14,14 @@ OpenCode runs in its own container with no shell. Its one way to run code is
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Literal
 
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from baseagent.codeagent.runner import CodeRunner, RunnerUnavailable, RunResult
@@ -105,6 +107,40 @@ class RunBridge:
                                                  request.mode, request.stdin)
             except RunnerUnavailable as exc:
                 raise BridgeError(503, f"The code runner is not available: {exc}") from exc
+            result.meta["code_sha256"] = code_sha256(request.code)
             if not ticket.closed:
                 ticket.runs.append(result)
             return result
+
+
+def code_sha256(code: str) -> str:
+    """Identifies which version of the code a run used (original, fixed, ...)."""
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def make_router(bridge: RunBridge) -> APIRouter:
+    """``POST /internal/code-runs``: what OpenCode's run_code tool calls."""
+    router = APIRouter()
+
+    @router.post("/internal/code-runs")
+    async def code_run(body: RunRequest, request: Request):
+        auth = request.headers.get("authorization", "")
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else None
+        try:
+            result = await bridge.handle(token, body)
+        except BridgeError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
+        return result.to_dict()
+
+    return router
+
+
+_shared: RunBridge | None = None
+
+
+def shared_bridge() -> RunBridge:
+    """The process's bridge: the server's endpoint and the code agent use the same one."""
+    global _shared
+    if _shared is None:
+        _shared = RunBridge()
+    return _shared

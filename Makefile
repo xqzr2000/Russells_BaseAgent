@@ -20,8 +20,8 @@ sandbox-images:   ## build the code agent's sandbox images (needs Docker)
 	docker build -t baseagent-runner:1 docker/runner
 	docker build -t baseagent-opencode:1 docker/opencode
 
-test-docker:      ## code-runner tests against real containers (after make sandbox-images)
-	uv run pytest -q -m docker tests/test_code_runner.py
+test-docker:      ## runner + full code-fix pipeline in real containers (after make sandbox-images)
+	uv run pytest -q -m docker tests/test_code_runner.py tests/test_code_fixer.py
 
 test-opencode:    ## the fixer's tools and permissions on a real OpenCode (set OPENCODE_BIN)
 	uv run pytest -q -m opencode tests/test_opencode_config.py

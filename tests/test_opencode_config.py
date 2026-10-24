@@ -21,7 +21,7 @@ import pytest
 
 from baseagent.codeagent import CodeRunner, RunBridge
 from baseagent.codeagent.opencode_config import (
-    ANSWER_SCHEMA, IMAGE_ENV, PERMISSION, ZERO_RETENTION_MODELS, NoFreeModel, build_config, parse_model_list,
+    ANSWER_SCHEMA, IMAGE_ENV, PERMISSION, RUN_LIMITS, fixer_prompt, ZERO_RETENTION_MODELS, NoFreeModel, build_config, parse_model_list,
     pick_model,
 )
 
@@ -82,6 +82,25 @@ def test_config_locks_the_fixer_down():
     assert not any("key" in k.lower() for k in json.dumps(config).split('"'))  # no API key
 
 
+def test_review_mode_denies_run_code():
+    review = build_config("deepseek-v4.1-flash-free", "review")
+    for rules in (review["permission"], review["agent"]["fixer"]["permission"]):
+        assert rules["run_code"] == "deny" and rules["read"] == "allow"
+    assert build_config("deepseek-v4.1-flash-free", "auto")["permission"]["run_code"] == "allow"
+    assert RUN_LIMITS == {"review": 0, "auto": 4, "test": 6}
+
+
+def test_mode_instructions():
+    assert "REVIEW ONLY" in fixer_prompt("review")
+    auto = fixer_prompt("auto")
+    assert "always call run_code with mode \"check\"" in auto and "at most 4" in auto
+    test = fixer_prompt("test")
+    assert "# TEST: added to show it works" in test and "at most 6" in test
+    assert "{verification}" not in auto and "{runs}" not in test
+    with pytest.raises(ValueError):
+        fixer_prompt("yolo")
+
+
 def test_dockerfile_sets_the_image_env():
     dockerfile = (ROOT / "docker/opencode/Dockerfile").read_text()
     for key, value in IMAGE_ENV.items():
@@ -90,7 +109,7 @@ def test_dockerfile_sets_the_image_env():
 
 
 def test_answer_schema_requires_issues_and_summary():
-    assert ANSWER_SCHEMA["required"] == ["issues", "summary"]
+    assert ANSWER_SCHEMA["required"] == ["issues", "summary", "not_run_reason"]
     item = ANSWER_SCHEMA["properties"]["issues"]["items"]
     assert item["required"] == ["line", "problem", "fix"]
 
@@ -172,7 +191,7 @@ def test_real_opencode_fixer_tools_and_run_code(tmp_path):
         {"tool_calls": [("StructuredOutput", {
             "issues": [{"line": 1, "problem": "missing ':'", "fix": "added ':'"},
                        {"line": 4, "problem": "'=+'", "fix": "'+='"}],
-            "summary": "fixed"})]},
+            "summary": "fixed", "not_run_reason": ""})]},
     ]
     with FakeOpenAI(script) as fake:
         config = build_config("deepseek-v4.1-flash-free")

@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
 from baseagent.chess import ChessError, ChessSession
-from baseagent.codeagent import BridgeError, RunBridge, RunRequest
+from baseagent.codeagent.bridge import RunBridge, make_router, shared_bridge
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
@@ -115,7 +115,8 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
 
     app = FastAPI(title="Russell's BaseAgent", lifespan=lifespan)
     app.state.manager = manager
-    app.state.code_bridge = bridge = code_bridge or RunBridge()
+    app.state.code_bridge = bridge = code_bridge or shared_bridge()
+    app.include_router(make_router(bridge))
 
     def session_or_404(session_id: str) -> Session:
         try:
@@ -137,16 +138,6 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
     @app.get("/api/health")
     async def health():
         return {"ok": True}
-
-    @app.post("/internal/code-runs")
-    async def code_run(body: RunRequest, request: Request):
-        auth = request.headers.get("authorization", "")
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else None
-        try:
-            result = await bridge.handle(token, body)
-        except BridgeError as exc:
-            raise HTTPException(exc.status, str(exc)) from exc
-        return result.to_dict()
 
     @app.get("/api/config")
     async def config():
