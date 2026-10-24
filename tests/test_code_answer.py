@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from baseagent.codeagent.answer import build_answer, original_behaviour, verification
+from baseagent.codeagent.answer import build_answer, verification
 from baseagent.codeagent.bridge import code_sha256
 from baseagent.codeagent.opencode_client import CodeFix, CodeTask, describe_tool, resolve_file, task_message
 from baseagent.codeagent.runner import RunResult
@@ -60,13 +60,11 @@ def test_fixed_code_that_still_fails_or_loops():
     assert "stopped after 10 s" in looping
 
 
-def test_original_code_behaviour_is_reported():
+def test_multi_line_output_and_no_original_code_note():
     runs = [run("run", "too_much_output", ORIGINAL), run("run", "ok", FIXED, "0\n1\n2\n")]
     answer = build_answer(fix(runs=runs))
-    assert "Your original code: stopped: it kept printing" in answer
     assert "**Ran:** printed \n```text\n0\n1\n2\n```" in answer
-    assert original_behaviour(fix(runs=[run("run", "error", ORIGINAL, stderr="SyntaxError: expected ':'")])) \
-        == "Your original code failed with: `SyntaxError: expected ':'`"
+    assert "original code" not in answer.lower()
 
 
 def test_no_bugs_found():

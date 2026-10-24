@@ -62,6 +62,7 @@ class DataScienceAgent(BaseAgent):
 | **Data scientist** | Do basic EDA in a Jupyter kernel. Returns a summary and a downloadable `.ipynb`. |
 | **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
 | **Chess coach** | Say *teach me chess*, and see the demo video. |
+| **Code agent** | Paste code (in a ``` block) or attach a file and ask *fix this*: OpenCode fixes and explains it in a sandbox with a free model. |
 
 > Jack the Coordinator is a Jack Russell Terrier. I'm building him to be interactive, with an LLM handling the intelligence and `Three.js` bringing him to life.
 > Wish me luck!
@@ -77,6 +78,26 @@ The kernel runs inside the Codespace, in `workspace/<chat id>/` next to the uplo
 `data/` folder, so the notebook re-runs from the top there. Nothing in `workspace/` or
 `runs/` is committed. Without an API key, the offline `fake-echo` model walks the same
 path with one canned EDA cell, which is handy for checking the plumbing.
+
+### Fix and explain code
+
+1. Paste code in a ``` block (or attach a `.py`, `.js`, `.ts`, ... file) and ask, e.g.
+   *why doesn't this stop?*
+2. Jack calls `fix_code`. OpenCode starts in a fresh, locked-down container (read-only,
+   non-root, no API keys) with a **free** OpenCode model, and its progress appears under the step.
+3. You get *What was wrong*, the fixed code with `# FIX n:` comments, and one line saying how
+   far it was verified: **Ran** (output shown), **Checked only** (syntax/type check, with the
+   reason it wasn't run) or **Reviewed only**.
+
+How much is run depends on your wording: *just look at it* / *don't run it* = review only;
+*does it work?* / *run it* = check and run (a marked `# TEST:` call is added to function-only
+code); anything else = always checked, run when it matters. Code runs in a second throwaway
+container: no network, 10 s, 512 MB. Concept questions (*what does `enumerate` do?*) Jack
+answers himself, with no containers.
+
+Needs Docker (in the devcontainer) and `make sandbox-images`. Only zero-retention free models
+are used; set `OPENCODE_ALLOW_TRAINING_MODELS=1` to also allow free models that may log or
+train on what they're sent. Try it without the chat: `uv run python -m baseagent.codeagent file.py`.
 
 ## GitHub Codespaces Quick Start
 

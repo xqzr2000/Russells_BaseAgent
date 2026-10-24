@@ -97,6 +97,7 @@ def test_mode_instructions():
     test = fixer_prompt("test")
     assert "# TEST: added to show it works" in test and "at most 6" in test
     assert "{verification}" not in auto and "{runs}" not in test
+    assert "Don't run the user's original code" in auto
     with pytest.raises(ValueError):
         fixer_prompt("yolo")
 

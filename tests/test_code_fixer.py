@@ -67,9 +67,8 @@ def fix_with(script, task, **kw):
         return result, progress, fake
 
 
-def test_endless_loop_is_caught_fixed_and_verified():
+def test_endless_loop_is_fixed_and_verified():
     script = [
-        {"tool_calls": [("run_code", {"path": "main.py", "mode": "run", "stdin": ""})]},
         {"tool_calls": [("edit", {"filePath": W, "oldString": "    print(i)\n",
                                   "newString": "    print(i)\n    i += 1  # FIX 1: advance i so the loop ends\n"})]},
         {"tool_calls": [("run_code", {"path": "main.py", "mode": "check", "stdin": ""})]},
@@ -81,11 +80,10 @@ def test_endless_loop_is_caught_fixed_and_verified():
     fix, progress, fake = fix_with(script, CodeTask(LOOP, request="Why doesn't this stop?"))
     assert fix.answered and fix.stopped is None, fix
     assert fix.fixed == LOOP + "    i += 1  # FIX 1: advance i so the loop ends\n"
-    assert [(r.mode, r.status) for r in fix.runs] == [("run", "too_much_output"), ("check", "ok"), ("run", "ok")]
+    assert [(r.mode, r.status) for r in fix.runs] == [("check", "ok"), ("run", "ok")]
     answer = build_answer(fix)
     assert "1. Line 2: i never changes" in answer
     assert "**Ran:** printed \n```text\n0\n1\n2\n```" in answer
-    assert "Your original code: stopped: it kept printing" in answer
     assert "running main.py" in progress and "run result: ok" in progress
     # The task reached the model with the user's question and code.
     first = fake.requests[0]["messages"]
@@ -111,4 +109,65 @@ def test_time_limit_aborts_and_still_answers():
     assert fix.stopped == "time limit"
     assert any("limit was reached" in p for p in progress)
     assert build_answer(fix).startswith("*OpenCode ran out of time (3-minute limit).*")
+    assert leftover_containers() == []
+
+
+def test_chat_message_runs_the_code_agent_end_to_end(tmp_path, monkeypatch):
+    """The real chat path: HTTP message -> Jack (scripted) -> fix_code -> OpenCode container
+    (scripted model) -> the server's own /internal/code-runs -> runner container -> reply."""
+    import json as _json
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+    from fake_openai import FakeOpenAI
+
+    from baseagent import ScriptedLLM
+    from baseagent.codeagent import tool as code_tool
+    from baseagent.server.app import create_app
+
+    jack = ScriptedLLM([{"role": "assistant", "content": "", "tool_calls": [{
+        "id": "call_0", "type": "function",
+        "function": {"name": "fix_code", "arguments": _json.dumps({"mode": "auto"})}}]}])
+    bridge = RunBridge(CodeRunner(image=RUNNER_IMAGE))
+    app = create_app(llm=jack, log_dir=tmp_path / "runs", workspace_dir=tmp_path / "ws", code_bridge=bridge)
+    with socket.socket() as s:
+        s.bind(("0.0.0.0", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning"))
+    threading.Thread(target=server.run, daemon=True).start()
+    while not server.started:
+        time.sleep(0.05)
+
+    script = [
+        {"tool_calls": [("edit", {"filePath": W, "oldString": "    print(i)\n",
+                                  "newString": "    print(i)\n    i += 1  # FIX 1: advance i\n"})]},
+        {"tool_calls": [("run_code", {"path": "main.py", "mode": "run", "stdin": ""})]},
+        {"tool_calls": [("StructuredOutput", {
+            "issues": [{"line": 2, "problem": "i never changes.", "fix": "Added i += 1."}],
+            "summary": "Fixed the endless loop.", "not_run_reason": ""})]},
+    ]
+    try:
+        with FakeOpenAI(script) as fake:
+            # Production wiring (the server's bridge, reached on its own port); only the model is scripted.
+            monkeypatch.setattr(code_tool, "_fixer", fixer_for(fake, bridge, port))
+            base = f"http://127.0.0.1:{port}"
+            with httpx.Client(base_url=base, timeout=300, trust_env=False) as client:
+                sid = client.post("/api/sessions", json={"agent": "coordinator"}).json()["id"]
+                events = []
+                with client.stream("POST", f"/api/sessions/{sid}/messages",
+                                   json={"content": f"Why doesn't this stop?\n```python\n{LOOP}```"}) as stream:
+                    for line in stream.iter_lines():
+                        if line.startswith("data: "):
+                            events.append(_json.loads(line[6:]))
+    finally:
+        server.should_exit = True
+    end = next(e for e in events if e["type"] == "turn_end")
+    assert end["stop_reason"] == "final", end
+    assert end["final_text"].startswith("**What was wrong**\n1. Line 2: i never changes.")
+    assert "**Ran:** printed \n```text\n0\n1\n2\n```" in end["final_text"]
+    assert any(e["type"] == "tool_progress" and e["message"] == "running main.py" for e in events)
+    assert len(jack.requests) == 1  # Jack never retyped or summarised the answer
     assert leftover_containers() == []

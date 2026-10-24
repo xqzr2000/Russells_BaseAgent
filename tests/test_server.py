@@ -118,7 +118,8 @@ def test_upload_eda_and_download_notebook(tmp_path):
 def test_file_endpoints_reject_bad_input(tmp_path):
     with client_with(FakeLLM(), tmp_path) as client:
         sid = client.post("/api/sessions", json={"agent": "general"}).json()["id"]
-        assert client.put(f"/api/sessions/{sid}/files/run.sh", content=b"echo").status_code == 415
+        assert client.put(f"/api/sessions/{sid}/files/run.exe", content=b"MZ").status_code == 415
+        assert client.put(f"/api/sessions/{sid}/files/main.py", content=b"print(1)").status_code == 200
         assert client.put(f"/api/sessions/{sid}/files/empty.csv", content=b"").status_code == 422
         # uploads can't escape data/: "/" never reaches the handler, other names are flattened
         assert client.put(f"/api/sessions/{sid}/files/..%2F..%2Fx.csv", content=b"a\n1\n").status_code == 405

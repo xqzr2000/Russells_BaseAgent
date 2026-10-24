@@ -74,6 +74,8 @@ async def _ignore(_: BaseModel) -> None:
 class BaseAgent:
     name: ClassVar[str] = "base"
     title: ClassVar[str] = "Base agent"
+    # How sentences refer to the agent ("Handing you back to Jack"); default "the <title>".
+    spoken_name: ClassVar[str | None] = None
     description: ClassVar[str] = "A general assistant with no tools."
     default_settings: ClassVar[dict[str, Any]] = {}
     examples: ClassVar[list[str]] = []  # starter prompts shown in the chat room
@@ -111,10 +113,15 @@ class BaseAgent:
         self._ready = False
         self._last_prompt_tokens: tuple[int, int] | None = None  # (actual, rough)
         # Set by the session when another agent handed the chat to this one; adds `handoff_back`.
-        self.handoff_parent: tuple[str, str] | None = None  # (name, title)
+        self.handoff_parent: tuple[str, str] | None = None  # (name, referred_as)
         self._end_turn: str | None = None
 
     # ------------------------------------------------------------------ hooks
+
+    @classmethod
+    def referred_as(cls) -> str:
+        """The agent's name inside a sentence: ``spoken_name`` or "the <title>"."""
+        return cls.spoken_name or f"the {cls.title}"
 
     @classmethod
     def make_settings(cls, **overrides: Any) -> AgentSettings:
@@ -185,7 +192,8 @@ class BaseAgent:
         if self._skills:
             prompt += "\n\n" + self._skills.catalog_prompt()
         if self.handoff_parent:
-            prompt += (f"\n\nThe {self.handoff_parent[1]} handed this chat to you. If the user "
+            parent = self.handoff_parent[1]
+            prompt += (f"\n\n{parent[:1].upper()}{parent[1:]} handed this chat to you. If the user "
                        "wants something outside your speciality, call `handoff_back`.")
         return prompt
 

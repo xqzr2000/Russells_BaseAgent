@@ -48,7 +48,11 @@ WEB_DIST = ROOT / "web" / "dist"
 WORKSPACE_DIR = ROOT / "workspace"  # git-ignored; one folder per chat
 KEEPALIVE_SECONDS = 15
 DEFAULT_AGENT = "coordinator"
-UPLOAD_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".xlsx", ".xls", ".parquet"}
+DATA_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".xlsx", ".xls", ".parquet"}
+# Code files for the code agent (Jack's fix_code tool).
+CODE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go",
+                 ".rs", ".rb", ".php", ".sh", ".sql", ".r", ".kt", ".swift", ".html", ".css", ".lua", ".bas"}
+UPLOAD_SUFFIXES = DATA_SUFFIXES | CODE_SUFFIXES
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # Model ids from /v1/models that are not chat-completions text models.

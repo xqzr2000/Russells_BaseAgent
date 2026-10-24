@@ -49,7 +49,7 @@ def make_handoff_tool(targets: dict[str, type["BaseAgent"]]) -> Tool:
         if agent not in targets:
             raise ToolError(f"Unknown specialist {agent!r}. Choose one of: {', '.join(targets) or '(none)'}.")
         ctx.agent.state["handoff"] = {"to": agent, "note": note.strip()}
-        return ToolResult(f"Handing you over to the {targets[agent].title}.", end_turn=True)
+        return ToolResult(f"Handing you over to {targets[agent].referred_as()}.", end_turn=True)
 
     return handoff
 
@@ -63,5 +63,5 @@ def handoff_back(note: str = "", ctx: ToolContext = None) -> ToolResult:
         note: Optional context for the main chat, e.g. "they want EDA on a CSV now".
     """
     ctx.agent.state["handoff"] = {"to": None, "note": note.strip()}
-    parent = ctx.agent.handoff_parent[1] if ctx.agent.handoff_parent else "main chat"
-    return ToolResult(f"Handing you back to the {parent}.", end_turn=True)
+    parent = ctx.agent.handoff_parent[1] if ctx.agent.handoff_parent else "the main chat"
+    return ToolResult(f"Handing you back to {parent}.", end_turn=True)

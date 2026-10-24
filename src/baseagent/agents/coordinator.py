@@ -1,8 +1,12 @@
-"""The coordinator: the chat room's default agent.
+"""The coordinator: the chat room's default agent, shown as "Jack (the coordinator)".
 
 It talks with the user, answers simple things itself, and delegates
 specialized work (any agent with ``delegatable = True``) through the
-``delegate`` tool. Adding a new specialist needs no change here.
+``delegate`` tool. Adding a new specialist needs no change here. Code to
+check or fix goes to the code agent through ``fix_code`` (baseagent.codeagent),
+whose answer is shown to the user exactly as built.
+
+The Jack persona is UI-only, apart from one fixed reply to "who are you?".
 """
 
 from __future__ import annotations
@@ -10,13 +14,23 @@ from __future__ import annotations
 from baseagent.agent import BaseAgent
 from baseagent.agents import register_agent
 from baseagent.builtin_tools import calculator, current_time
+from baseagent.codeagent.tool import fix_code
 from baseagent.delegation import SubAgentPool, make_delegate_tool
 from baseagent.handoff import handoff_targets, make_handoff_tool
 
-SYSTEM_PROMPT = """\
+IDENTITY_REPLY = "Woof, Jack here, I'm hunting jobs for Russell! You can ask me anything!"
+
+SYSTEM_PROMPT = f"""\
 You are the coordinator in Russell's BaseAgent chat room. You talk with the user and \
 route specialized work to specialist agents with the `delegate` tool.
 
+- If the user asks who you are (who are you, what's your name, what are you), reply with \
+exactly this and nothing else: {IDENTITY_REPLY}
+- Code: when the user wants code checked, fixed, debugged or tested, call `fix_code` (it reads \
+the code from their message or attached file itself, and picks up their question). Choose \
+its mode from their wording. Its answer is shown to the user as-is. Questions about \
+concepts or what code means ("what does enumerate do?", "explain this list comprehension") \
+you answer yourself, without `fix_code`. If `fix_code` fails, tell the user briefly why.
 - When the user wants to learn or play chess ("teach me chess", "let's play chess", "how does \
 the knight move?"), call `handoff` with agent "chess_coach" right away and don't answer it \
 yourself: the coach shows a board and answers in this same reply. Use `handoff` for every \
@@ -36,11 +50,12 @@ them below your reply."""
 @register_agent
 class CoordinatorAgent(BaseAgent):
     name = "coordinator"
-    title = "Coordinator"
+    title = "Jack (the coordinator)"
+    spoken_name = "Jack"
     description = (
         "Your main chat. Answers simple questions itself and hands specialized work to the "
         "right agent. Drag a CSV into the chat and ask for EDA to get a Jupyter notebook back, "
-        "or say \"let's play chess\" to bring in the chess coach."
+        "say \"let's play chess\" to bring in the chess coach, or paste code to have it checked and fixed."
     )
     examples = ["What can you do?", "Let's play chess", "Teach me chess. I've never played.",
                 "What is 12 * (3 + 4)^2 / 7?"]
@@ -57,7 +72,7 @@ class CoordinatorAgent(BaseAgent):
         return SYSTEM_PROMPT
 
     def get_tools(self):
-        tools = [calculator, current_time, make_delegate_tool(self.subagents.available())]
+        tools = [calculator, current_time, fix_code, make_delegate_tool(self.subagents.available())]
         targets = handoff_targets(exclude=type(self))
         if targets:
             tools.append(make_handoff_tool(targets))

@@ -9,13 +9,13 @@
     ```
 
     **Ran:** printed `45`
-    Your original code: stopped after 10 s: it never finished (an endless loop).
 
     *Fixed by OpenCode with the free model deepseek-v4.1-flash-free.*
 
-The verification line ("Ran", "Checked only", "Reviewed only") and the note
-about the original code come from the bridge's run log, matched to the code
-by its hash, not from what the model says it did.
+The verification line ("Ran", "Checked only", "Reviewed only") comes from the
+bridge's run log, matched to the final code by its hash, not from what the
+model says it did. The user's original code isn't run: they've already seen
+what it does.
 """
 
 from __future__ import annotations
@@ -85,23 +85,6 @@ def verification(fix: CodeFix) -> str:
     return f"**Reviewed only:** not run. {reason}." if reason else "**Reviewed only:** not run."
 
 
-def original_behaviour(fix: CodeFix) -> str | None:
-    """What happened when the user's own code was run, if it was and it went wrong."""
-    original = code_sha256(fix.original)
-    if original == code_sha256(fix.fixed):
-        return None
-    for run in fix.runs:
-        if run.meta.get("code_sha256") != original or run.mode != "run":
-            continue
-        stopped = _stopped(run)
-        if stopped:
-            return f"Your original code: {stopped}."
-        if run.status == "error":
-            last = _last_line(run.stderr or run.stdout)
-            return f"Your original code failed with: `{last}`" if last else None
-    return None
-
-
 def build_answer(fix: CodeFix) -> str:
     changed = code_sha256(fix.fixed) != code_sha256(fix.original)
     if not fix.answered and not changed:
@@ -136,9 +119,6 @@ def build_answer(fix: CodeFix) -> str:
     if fix.summary and fix.issues:
         parts.append(fix.summary)
     parts.append(verification(fix))
-    before = original_behaviour(fix)
-    if before:
-        parts.append(before)
     if fix.model:
         privacy = "" if fix.zero_retention else " (this free model may use what it's sent for training)"
         parts.append(f"*{'Fixed' if changed else 'Checked'} by OpenCode with the free model {fix.model}{privacy}.*")

@@ -93,6 +93,8 @@ correct. Do not reformat, rename or "improve" anything else.
 - Edit the file in place. Do not create other files.
 - On every line you change, add a short comment numbered in order, in the language's comment \
 syntax: `# FIX 1: added ':'` in Python, `// FIX 1: ...` in JavaScript and TypeScript.
+- Focus on fixing and explaining. Don't run the user's original code: they have already seen \
+what it does. Use run_code only on your fixed version.
 - If the code never finishes (an endless loop) or uses too much memory, fix the cause and say \
 why it would not stop.
 - If the code has no bugs, change nothing and say so.

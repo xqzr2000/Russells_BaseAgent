@@ -20,7 +20,9 @@ import type {
 } from "./types";
 
 const DEFAULTS_KEY = "baseagent.defaultSettings";
-const UPLOAD_ACCEPT = ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet";
+const UPLOAD_ACCEPT =
+  ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet," +
+  ".py,.js,.mjs,.cjs,.ts,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.sh,.sql,.r,.kt,.swift,.html,.css,.lua,.bas";
 
 const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
@@ -530,7 +532,7 @@ export default function App() {
                 }
               }}
               placeholder={
-                attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${talkingTo ?? "the agent"}`
+                attachments.length ? "Ask about the attached file, e.g. Do EDA on it, or Fix this code" : `Message ${talkingTo ?? "the agent"}`
               }
               rows={Math.min(8, Math.max(1, draft.split("\n").length))}
               aria-label="Message"

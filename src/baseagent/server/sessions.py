@@ -116,7 +116,7 @@ class Session:
             if self.make_agent is None:
                 raise KeyError(f"This chat cannot create the {name!r} agent.")
             agent = self.make_agent(name)
-            agent.handoff_parent = (self.agent.name, self.agent.title)
+            agent.handoff_parent = (self.agent.name, type(self.agent).referred_as())
             self.specialists[name] = agent
         inherited = {key: getattr(self.agent.settings, key) for key in INHERITED_SETTINGS}
         agent.settings = agent.settings.model_copy(update=inherited)
