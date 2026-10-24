@@ -77,6 +77,9 @@ class BaseAgent:
     # How sentences refer to the agent ("Handing you back to Jack"); default "the <title>".
     spoken_name: ClassVar[str | None] = None
     description: ClassVar[str] = "A general assistant with no tools."
+    # Short form for the coordinator's delegate/handoff lists (sent with every message);
+    # defaults to ``description``.
+    brief: ClassVar[str | None] = None
     default_settings: ClassVar[dict[str, Any]] = {}
     examples: ClassVar[list[str]] = []  # starter prompts shown in the chat room
     skills_dir: ClassVar[str | Path | None] = None
@@ -276,6 +279,24 @@ class BaseAgent:
             await self.emit(ev.Error(turn=turn, message=final_text))
         await self._finish(turn, final_text, steps, stop_reason, usage)
         return TurnResult(final_text, steps, stop_reason, usage)
+
+    async def reply_without_model(self, user_message: str, text: str) -> TurnResult:
+        """A complete turn with a fixed reply and no model call (e.g. a canned answer).
+
+        Emits the same events as a normal one-step turn and records both messages
+        in memory, so the chat and later turns look exactly as if the model replied.
+        """
+        await self.ensure_ready()
+        self.turn += 1
+        turn = self.turn
+        await self.emit(ev.TurnStart(turn=turn, user_message=user_message,
+                                     model=self.settings.model, agent=self.name))
+        self.memory.add({"role": "user", "content": user_message})
+        await self.emit(ev.StepStart(turn=turn, step=1))
+        self.memory.add({"role": "assistant", "content": text})
+        await self.emit(ev.AssistantMessage(turn=turn, step=1, content=text, tool_calls=[]))
+        await self._finish(turn, text, 1, "final", ev.Usage())
+        return TurnResult(text, 1, "final", ev.Usage())
 
     async def _finish(self, turn, final_text, steps, stop_reason, usage) -> None:
         self.total_usage = self.total_usage + usage

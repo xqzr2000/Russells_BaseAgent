@@ -84,6 +84,7 @@ class DataScienceAgent(BaseAgent):
         "statistics. Records every step in a downloadable .ipynb notebook and returns a short "
         "summary of its findings. Give it the file path (e.g. data/sales.csv)."
     )
+    brief = "EDA on a tabular data file (CSV and similar); returns a summary and an .ipynb. Give it the path."
     delegatable = True
     default_settings = {"max_steps": 25, "tool_timeout": 180, "compact_threshold_tokens": 40_000}
 

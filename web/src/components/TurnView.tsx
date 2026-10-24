@@ -127,6 +127,15 @@ function TraceStep({ step, live }: { step: Step; live: boolean }) {
   );
 }
 
+// Cached input is the repeated start of the prompt (instructions and tool definitions),
+// which OpenAI bills at a discount.
+function usageDetail(usage: { cached_tokens: number; reasoning_tokens: number }): string {
+  const parts: string[] = [];
+  if (usage.cached_tokens > 0) parts.push(`${usage.cached_tokens.toLocaleString()} cached`);
+  if (usage.reasoning_tokens > 0) parts.push(`${usage.reasoning_tokens.toLocaleString()} reasoning`);
+  return parts.join(", ");
+}
+
 const STOP_MESSAGES: Record<string, string> = {
   step_limit: "Stopped at the step limit. Raise Max steps in Settings or ask the agent to continue.",
   cancelled: "Stopped by you.",
@@ -211,9 +220,14 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
         )}
         {turn.ended && turn.usage && (
           <div className="turn-meta">
-            {steps} {steps === 1 ? "step" : "steps"}
-            {turn.usage.total_tokens > 0 && `, ${turn.usage.total_tokens.toLocaleString()} tokens`}
-            {turn.usage.reasoning_tokens > 0 && ` (${turn.usage.reasoning_tokens.toLocaleString()} reasoning)`}, {turn.model}
+            {turn.usage.total_tokens > 0 ? (
+              <>
+                {steps} {steps === 1 ? "step" : "steps"}, {turn.usage.total_tokens.toLocaleString()} tokens
+                {usageDetail(turn.usage) && ` (${usageDetail(turn.usage)})`}, {turn.model}
+              </>
+            ) : (
+              "Answered without calling the model"
+            )}
           </div>
         )}
       </div>

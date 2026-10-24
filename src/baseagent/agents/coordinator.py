@@ -11,7 +11,9 @@ The Jack persona is UI-only, apart from one fixed reply to "who are you?".
 
 from __future__ import annotations
 
-from baseagent.agent import BaseAgent
+import re
+
+from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.builtin_tools import calculator, current_time
 from baseagent.codeagent.tool import fix_code
@@ -20,31 +22,36 @@ from baseagent.handoff import handoff_targets, make_handoff_tool
 
 IDENTITY_REPLY = "Woof, Jack here, I'm hunting jobs for Russell! You can ask me anything!"
 
-SYSTEM_PROMPT = f"""\
-You are the coordinator in Russell's BaseAgent chat room. You talk with the user and \
-route specialized work to specialist agents with the `delegate` tool.
+# Whole-message "who are you?" phrasings answered without calling the model (0 tokens,
+# word-for-word). Anything else, including unusual phrasings, goes to the model, whose
+# prompt has the same rule.
+_IDENTITY = re.compile(
+    r"^(?:(?:hi|hey|hello|yo|ok|okay|so)\s+)*(?:jack\s+)?"
+    r"(?:who\s+(?:are|r)\s+(?:you|u)|who\s+(?:is|'s|s)\s+this|what\s+are\s+you"
+    r"|what(?:\s+is|'s|s)?\s+your\s+name|your\s+name|introduce\s+yourself|tell\s+me\s+about\s+yourself)"
+    r"(?:\s+jack)?$")
 
-- If the user asks who you are (who are you, what's your name, what are you), reply with \
-exactly this and nothing else: {IDENTITY_REPLY}
-- Code: when the user wants code checked, fixed, debugged or tested, call `fix_code` (it reads \
-the code from their message or attached file itself, and picks up their question). Choose \
-its mode from their wording. Its answer is shown to the user as-is. Questions about \
-concepts or what code means ("what does enumerate do?", "explain this list comprehension") \
-you answer yourself, without `fix_code`. If `fix_code` fails, tell the user briefly why.
-- When the user wants to learn or play chess ("teach me chess", "let's play chess", "how does \
-the knight move?"), call `handoff` with agent "chess_coach" right away and don't answer it \
-yourself: the coach shows a board and answers in this same reply. Use `handoff` for every \
-specialist listed in its description; those talk with the user directly.
-- When a request matches a `delegate` specialist's description, delegate it. The specialist cannot \
-see this conversation: write a complete task with exact file paths as they appear in the \
-user's message (e.g. data/titanic.csv), what to do, and any preferences the user stated.
-- Files the user attached are listed at the end of their message. If a request needs a \
-file that isn't attached or mentioned, ask the user to drag and drop it into the chat.
-- Answer general questions and small talk yourself. Use `calculator` for arithmetic and \
-`current_time` for the date or time.
-- After a specialist finishes, reply with a short Markdown summary of what it found: key \
-numbers and issues, no long tables. If it produced files, tell the user they can download \
-them below your reply."""
+
+def is_identity_question(message: str) -> bool:
+    text = message.strip().lower().replace("\u2019", "'")
+    if len(text) > 60:
+        return False
+    text = re.sub(r"[^\w\s']+", " ", text)
+    return bool(_IDENTITY.match(re.sub(r"\s+", " ", text).strip()))
+
+SYSTEM_PROMPT = f"""\
+You are the coordinator in Russell's BaseAgent chat room: you talk with the user, answer \
+simple things yourself and route specialized work.
+
+- "Who are you?" and similar: reply with exactly this and nothing else: {IDENTITY_REPLY}
+- Code to check, fix, debug or test: call `fix_code`. Questions about concepts or what code \
+means: answer yourself.
+- Learning or playing chess: call `handoff` to chess_coach right away, without answering yourself.
+- Work matching a `delegate` specialist (e.g. EDA on a CSV): delegate it, then reply with a \
+short Markdown summary (key numbers and issues, no long tables) and mention any downloads.
+- Attached files are listed at the end of the user's message. If a request needs a file that \
+isn't there, ask them to drag and drop it into the chat.
+- Use `calculator` for arithmetic and `current_time` for the date or time."""
 
 
 @register_agent
@@ -67,6 +74,11 @@ class CoordinatorAgent(BaseAgent):
 
     async def close(self) -> None:
         await self.subagents.close()
+
+    async def run(self, user_message: str, via: str | None = None) -> TurnResult:
+        if via is None and is_identity_question(user_message):
+            return await self.reply_without_model(user_message, IDENTITY_REPLY)
+        return await super().run(user_message, via)
 
     def system_prompt(self) -> str:
         return SYSTEM_PROMPT

@@ -56,22 +56,10 @@ def question_from(text: str) -> str:
 
 
 DESCRIPTION = """\
-Check, fix and explain the user's code with the code agent (OpenCode in a sandbox with a \
-free model). Use it when the user wants code checked, fixed, debugged or tested. Don't use \
-it for questions about concepts or what something means: answer those yourself.
-
-The tool reads the code itself, so don't copy it:
-- a ``` code block in the user's latest message (`block`: 1 = first, 0 = last), or
-- an attached file (`file`: its path as listed in the message, e.g. data/main.py).
-Only if the code is in neither (pasted without ``` fences), pass it in `code`, exactly as \
-written.
-
-Choose `mode` from the user's wording:
-- review: they asked you not to run it ("just look at it", "don't run it")
-- test: they want to see it work ("does it work?", "run it", "test it")
-- auto: everything else ("check this", "fix this", "why doesn't this work?")
-
-Its answer is shown to the user exactly as written and ends your turn."""
+Check, fix and explain the user's code in a sandbox (OpenCode, free model). For checking, \
+fixing, debugging or testing code; answer concept questions yourself. It reads the code from \
+the user's ``` block or attached file itself, so don't copy it. Its answer is shown as-is \
+and ends your turn."""
 
 
 @tool(name="fix_code", description=DESCRIPTION, exclusive=True, timeout=TOOL_TIMEOUT)
@@ -79,12 +67,12 @@ async def fix_code(mode: Literal["review", "auto", "test"] = "auto", question: s
                    block: int = 0, language: str = "", code: str = "", ctx: ToolContext = None) -> ToolResult:
     """
     Args:
-        mode: review, auto or test (see above).
-        question: What the user asked, in their words (e.g. "Why doesn't this loop stop?").
-        file: Path of an attached code file, e.g. data/main.py. Leave empty for a code block.
-        block: Which code block in the user's latest message: 1 = first, 2 = second, 0 = last.
-        language: The language, only if the code block has no language tag and it isn't obvious.
-        code: Only when the code is not in a code block or a file: the code, copied exactly.
+        mode: review: they said not to run it. test: they want to see it work ("does it work?", "run it"). auto: anything else.
+        question: The user's request in their words.
+        file: An attached file's path, e.g. data/main.py. Empty for a code block.
+        block: Which ``` block in their latest message: 1 = first, 0 = last.
+        language: Only if the code block has no language tag.
+        code: Only for code pasted without ``` fences: the code, copied exactly.
     """
     message = latest_user_message(ctx.agent.memory.history)
     filename, fence = None, ""

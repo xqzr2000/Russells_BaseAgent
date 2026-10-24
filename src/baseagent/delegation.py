@@ -26,11 +26,9 @@ DELEGATE_TIMEOUT = 1800.0  # a whole sub-agent run, not one call
 INHERITED_SETTINGS = ("model", "reasoning_effort", "temperature")
 
 DELEGATE_DESCRIPTION = """\
-Hand a task to a specialist agent and wait for its result. The specialist cannot see \
-this conversation, so write a complete, self-contained task: exact file paths \
-(e.g. data/sales.csv), what to do, and any preferences the user stated. It returns the \
-specialist's summary; files it produces are offered to the user as downloads. The same \
-specialist handles follow-ups in this chat and remembers its earlier work.
+Give a specialist a task and wait for its summary. It can't see this chat, so make the task \
+self-contained: exact file paths (e.g. data/sales.csv), what to do and the user's preferences. \
+Files it makes are offered as downloads; it remembers its earlier work in this chat.
 
 Specialists:
 {roster}"""
@@ -138,6 +136,6 @@ async def delegate(agent: str, task: str, ctx: ToolContext) -> ToolResult:
 
 
 def make_delegate_tool(options: dict[str, type["BaseAgent"]]) -> Tool:
-    roster = "\n".join(f"- {name}: {cls.description}" for name, cls in options.items())
+    roster = "\n".join(f"- {name}: {cls.brief or cls.description}" for name, cls in options.items())
     return tool(delegate, name="delegate", timeout=DELEGATE_TIMEOUT,
                 description=DELEGATE_DESCRIPTION.format(roster=roster or "- (none registered)"))

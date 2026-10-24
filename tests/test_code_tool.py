@@ -136,3 +136,32 @@ def test_jack_title_identity_and_tool():
     assert params["mode"]["enum"] == ["review", "auto", "test"]
     assert "code" in params and "file" in params and "block" in params
 
+
+
+async def test_identity_questions_skip_the_model(tmp_path):
+    agent, llm, events = jack([{"role": "assistant", "content": "Working for Russell."}], tmp_path)
+    result = await agent.run("Hey Jack, who are you?")
+    assert result.final_text == IDENTITY_REPLY and llm.requests == []
+    end = next(e for e in events if e["type"] == "turn_end")
+    assert end["final_text"] == IDENTITY_REPLY and end["usage"]["total_tokens"] == 0
+    # A longer question isn't a match, and the model sees the earlier exchange.
+    await agent.run("Who are you working for?")
+    assert len(llm.requests) == 1
+    sent = [m["content"] for m in llm.requests[0]["messages"]]
+    assert "Hey Jack, who are you?" in sent and IDENTITY_REPLY in sent
+
+
+def test_identity_matcher():
+    from baseagent.agents.coordinator import is_identity_question as q
+
+    assert all(q(m) for m in ["Who are you?", "hi, who are you", "Hey Jack, what’s your name?", "whats your name",
+                              "What are you?", "introduce yourself", "who r u", "tell me about yourself"])
+    assert not any(q(m) for m in ["who are you working for?", "what are you doing?", "Who are you? Also fix this",
+                                  "who are the authors of pandas", "what is your name in chess terms"])
+
+
+def test_specialist_lists_use_the_short_briefs():
+    agent = CoordinatorAgent(ScriptedLLM([]), AgentSettings(model="m"))
+    tools = {t.name: t.schema()["function"]["description"] for t in agent.get_tools()}
+    assert "- data_science: EDA on a tabular data file" in tools["delegate"]
+    assert "- chess_coach: Chess lessons and games" in tools["handoff"]

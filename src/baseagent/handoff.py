@@ -20,10 +20,8 @@ if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
 
 HANDOFF_DESCRIPTION = """\
-Hand this chat over to a specialist who talks with the user directly from now on (for \
-interactive work: lessons, games). The specialist answers the user's current message itself \
-in this same reply, so do not answer it yourself. Use this instead of `delegate` for these \
-specialists.
+Hand the chat to a specialist who then talks with the user directly (lessons, games). It \
+answers the current message in this same reply, so don't answer it yourself.
 
 Specialists:
 {roster}"""
@@ -37,7 +35,7 @@ def handoff_targets(exclude: type["BaseAgent"] | None = None) -> dict[str, type[
 
 
 def make_handoff_tool(targets: dict[str, type["BaseAgent"]]) -> Tool:
-    roster = "\n".join(f"- {name}: {cls.description}" for name, cls in targets.items()) or "(none)"
+    roster = "\n".join(f"- {name}: {cls.brief or cls.description}" for name, cls in targets.items()) or "(none)"
 
     @tool(name="handoff", description=HANDOFF_DESCRIPTION.format(roster=roster), exclusive=True)
     def handoff(agent: str, note: str = "", ctx: ToolContext = None) -> ToolResult:
