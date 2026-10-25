@@ -1,0 +1,4 @@
+[submodule "knowledge"]
+	path = knowledge
+	url = https://github.com/xqzr2000/jack-knows-it-all.git
+	branch = main

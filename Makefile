@@ -1,4 +1,4 @@
-.PHONY: setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode knowledge
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -25,6 +25,11 @@ test-docker:      ## runner + full code-fix pipeline in real containers (after m
 
 test-opencode:    ## the fixer's tools and permissions on a real OpenCode (set OPENCODE_BIN)
 	uv run pytest -q -m opencode tests/test_opencode_config.py
+
+knowledge:        ## pull the latest merged skills into knowledge/ (private submodule)
+	git submodule update --init --remote knowledge
+	@git -C knowledge log -1 --format='knowledge/ is at %h %s'
+	@git diff --quiet -- knowledge || echo "Pointer moved: commit 'knowledge' when convenient."
 
 typecheck:        ## TypeScript type check for the UI
 	cd web && npm run typecheck

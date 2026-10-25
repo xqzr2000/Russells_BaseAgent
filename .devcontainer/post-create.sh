@@ -9,6 +9,13 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
+# The data scientist's course skills: a private submodule. Optional, never fatal.
+if git submodule update --init knowledge 2>/dev/null; then
+  echo "Knowledge skills: $(git -C knowledge log -1 --format='%h %s')"
+else
+  echo "Knowledge skills not available (no access to the private repo); continuing without them."
+fi
+
 uv sync                          # Python deps (incl. the data science kernel's) into .venv
 (cd web && npm ci)               # UI deps from web/package-lock.json
 if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi

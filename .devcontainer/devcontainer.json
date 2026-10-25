@@ -29,6 +29,15 @@
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "postAttachCommand": "echo 'Run `make dev`, then open the Chat room port (5173).'",
   "customizations": {
+    // Read access to the private knowledge repo (the `knowledge/` submodule: the data
+    // scientist's skills). Codespaces asks to authorize it when a codespace is created; it
+    // doesn't apply to existing codespaces. Without access, choose "Continue without
+    // authorizing": everything else works, the data scientist just has no course skills.
+    "codespaces": {
+      "repositories": {
+        "xqzr2000/jack-knows-it-all": { "permissions": { "contents": "read" } }
+      }
+    },
     "vscode": {
       "extensions": [
         "ms-python.python",

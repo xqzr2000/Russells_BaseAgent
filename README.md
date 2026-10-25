@@ -79,6 +79,18 @@ The kernel runs inside the Codespace, in `workspace/<chat id>/` next to the uplo
 `runs/` is committed. Without an API key, the offline `fake-echo` model walks the same
 path with one canned EDA cell, which is handy for checking the plumbing.
 
+### Course knowledge (`knowledge/`)
+
+`knowledge/` is a git submodule pointing at a private repo of data-science concept skills
+written from course notes (one method per skill, e.g. `pca`), plus practice problems. It's
+optional: without access, the folder stays empty and everything else works.
+
+- In a Codespace, accept the prompt to authorize read access when the codespace is created
+  (the permission is requested in `.devcontainer/devcontainer.json`, and only applies to
+  codespaces created after it was added).
+- `make knowledge` pulls the latest merged skills; commit the moved `knowledge` pointer when
+  convenient.
+
 ### Fix and explain code
 
 1. Paste code in a ``` block (or attach a `.py`, `.js`, `.ts`, ... file) and ask, e.g.
