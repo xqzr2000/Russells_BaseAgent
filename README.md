@@ -124,10 +124,11 @@ make dev
 
 ### See it in action.
 
-- Teaching Chess
-- Data Science Capabilities
+- Fixing Python code
+- Teaching Chess, get interrupted
+- Data Science Capabilities and more
 
-https://github.com/user-attachments/assets/8b300387-fe7c-4ea6-9861-8a92126647fc
+https://github.com/user-attachments/assets/57b80f7d-bdc9-4745-9fb1-bfad1a152d7d
 
 
 ## Repo tree
