@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
+import { fenceIfCode } from "./codeLanguage";
 import { ChessPanel } from "./components/ChessPanel";
 import { FileIcon, formatSize } from "./components/FileIcon";
 import { Meadow, firstImpression, jackForced } from "./components/Meadow";
@@ -20,7 +21,9 @@ import type {
 } from "./types";
 
 const DEFAULTS_KEY = "baseagent.defaultSettings";
-const UPLOAD_ACCEPT = ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet";
+const UPLOAD_ACCEPT =
+  ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet," +
+  ".py,.js,.mjs,.cjs,.ts,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.sh,.sql,.r,.kt,.swift,.html,.css,.lua,.bas";
 
 const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
@@ -523,6 +526,21 @@ export default function App() {
                 // Jack's first impression starts on the first keystroke of a fresh chat.
                 if (jack === "armed" && e.target.value && !hasChat) setJack("playing");
               }}
+              onPaste={(e) => {
+                // Pasted code goes into a ``` block with its language, so the code agent
+                // reads it exactly as pasted.
+                const fenced = fenceIfCode(e.clipboardData.getData("text/plain"));
+                if (!fenced) return;
+                e.preventDefault();
+                const el = e.currentTarget;
+                const before = draft.slice(0, el.selectionStart);
+                const after = draft.slice(el.selectionEnd);
+                const head = before + (before && !before.endsWith("\n") ? "\n" : "") + fenced + "\n";
+                const next = head + after.replace(/^\n/, "");
+                setDraft(next);
+                if (jack === "armed" && !hasChat) setJack("playing");
+                requestAnimationFrame(() => el.setSelectionRange(head.length, head.length));
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
@@ -530,7 +548,7 @@ export default function App() {
                 }
               }}
               placeholder={
-                attachments.length ? "Ask about the attached file, e.g. Do EDA on it" : `Message ${talkingTo ?? "the agent"}`
+                attachments.length ? "Ask about the attached file, e.g. Do EDA on it, or Fix this code" : `Message ${talkingTo ?? "the agent"}`
               }
               rows={Math.min(8, Math.max(1, draft.split("\n").length))}
               aria-label="Message"

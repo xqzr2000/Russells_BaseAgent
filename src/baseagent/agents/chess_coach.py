@@ -83,6 +83,7 @@ class ChessCoachAgent(BaseAgent):
         "Learn chess on a board above the chat, from how the pieces move to playing a full game. "
         "The coach shows moves with arrows and dots."
     )
+    brief = "Chess lessons and games on a board above the chat."
     examples = [
         "Teach me chess. I've never played.",
         "How does the knight move?",

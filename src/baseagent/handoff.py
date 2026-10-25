@@ -20,10 +20,8 @@ if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
 
 HANDOFF_DESCRIPTION = """\
-Hand this chat over to a specialist who talks with the user directly from now on (for \
-interactive work: lessons, games). The specialist answers the user's current message itself \
-in this same reply, so do not answer it yourself. Use this instead of `delegate` for these \
-specialists.
+Hand the chat to a specialist who then talks with the user directly (lessons, games). It \
+answers the current message in this same reply, so don't answer it yourself.
 
 Specialists:
 {roster}"""
@@ -37,7 +35,7 @@ def handoff_targets(exclude: type["BaseAgent"] | None = None) -> dict[str, type[
 
 
 def make_handoff_tool(targets: dict[str, type["BaseAgent"]]) -> Tool:
-    roster = "\n".join(f"- {name}: {cls.description}" for name, cls in targets.items()) or "(none)"
+    roster = "\n".join(f"- {name}: {cls.brief or cls.description}" for name, cls in targets.items()) or "(none)"
 
     @tool(name="handoff", description=HANDOFF_DESCRIPTION.format(roster=roster), exclusive=True)
     def handoff(agent: str, note: str = "", ctx: ToolContext = None) -> ToolResult:
@@ -49,7 +47,7 @@ def make_handoff_tool(targets: dict[str, type["BaseAgent"]]) -> Tool:
         if agent not in targets:
             raise ToolError(f"Unknown specialist {agent!r}. Choose one of: {', '.join(targets) or '(none)'}.")
         ctx.agent.state["handoff"] = {"to": agent, "note": note.strip()}
-        return ToolResult(f"Handing you over to the {targets[agent].title}.", end_turn=True)
+        return ToolResult(f"Handing you over to {targets[agent].referred_as()}.", end_turn=True)
 
     return handoff
 
@@ -63,5 +61,5 @@ def handoff_back(note: str = "", ctx: ToolContext = None) -> ToolResult:
         note: Optional context for the main chat, e.g. "they want EDA on a CSV now".
     """
     ctx.agent.state["handoff"] = {"to": None, "note": note.strip()}
-    parent = ctx.agent.handoff_parent[1] if ctx.agent.handoff_parent else "main chat"
-    return ToolResult(f"Handing you back to the {parent}.", end_turn=True)
+    parent = ctx.agent.handoff_parent[1] if ctx.agent.handoff_parent else "the main chat"
+    return ToolResult(f"Handing you back to {parent}.", end_turn=True)

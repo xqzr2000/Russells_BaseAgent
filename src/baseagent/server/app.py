@@ -10,6 +10,8 @@
     POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
     POST /api/sessions/{id}/chess/rewind   step back a move or restart the lesson position
     GET  /api/agents | /api/models | /api/config
+    POST /internal/code-runs           the code agent's sandboxed OpenCode runs a snippet
+                                       (one-time bearer token; not proxied by the web UI)
 
 In production (``make serve``) it also serves the built web UI from web/dist.
 """
@@ -35,6 +37,7 @@ from pydantic import BaseModel, Field
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
 from baseagent.chess import ChessError, ChessSession
+from baseagent.codeagent.bridge import RunBridge, make_router, shared_bridge
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
 from baseagent.server.sessions import Session, SessionManager
@@ -45,7 +48,11 @@ WEB_DIST = ROOT / "web" / "dist"
 WORKSPACE_DIR = ROOT / "workspace"  # git-ignored; one folder per chat
 KEEPALIVE_SECONDS = 15
 DEFAULT_AGENT = "coordinator"
-UPLOAD_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".xlsx", ".xls", ".parquet"}
+DATA_SUFFIXES = {".csv", ".tsv", ".txt", ".json", ".xlsx", ".xls", ".parquet"}
+# Code files for the code agent (Jack's fix_code tool).
+CODE_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go",
+                 ".rs", ".rb", ".php", ".sh", ".sql", ".r", ".kt", ".swift", ".html", ".css", ".lua", ".bas"}
+UPLOAD_SUFFIXES = DATA_SUFFIXES | CODE_SUFFIXES
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # Model ids from /v1/models that are not chat-completions text models.
@@ -98,7 +105,7 @@ def default_model() -> str:
 
 
 def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
-               workspace_dir: Path | None = None) -> FastAPI:
+               workspace_dir: Path | None = None, code_bridge: RunBridge | None = None) -> FastAPI:
     load_dotenv(ROOT / ".env")  # never overrides real env vars such as Codespaces secrets
     manager = SessionManager(llm or RoutingLLM(), log_dir or ROOT / "runs",
                              workspace_dir or WORKSPACE_DIR)
@@ -112,6 +119,8 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
 
     app = FastAPI(title="Russell's BaseAgent", lifespan=lifespan)
     app.state.manager = manager
+    app.state.code_bridge = bridge = code_bridge or shared_bridge()
+    app.include_router(make_router(bridge))
 
     def session_or_404(session_id: str) -> Session:
         try:

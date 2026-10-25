@@ -1,4 +1,4 @@
-.PHONY: setup dev server web test typecheck check build serve clean
+.PHONY: setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -15,6 +15,16 @@ web:              ## chat room only (port 5173)
 
 test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
+
+sandbox-images:   ## build the code agent's sandbox images (needs Docker)
+	docker build -t baseagent-runner:1 docker/runner
+	docker build -t baseagent-opencode:1 docker/opencode
+
+test-docker:      ## runner + full code-fix pipeline in real containers (after make sandbox-images)
+	uv run pytest -q -m docker tests/test_code_runner.py tests/test_code_fixer.py
+
+test-opencode:    ## the fixer's tools and permissions on a real OpenCode (set OPENCODE_BIN)
+	uv run pytest -q -m opencode tests/test_opencode_config.py
 
 typecheck:        ## TypeScript type check for the UI
 	cd web && npm run typecheck

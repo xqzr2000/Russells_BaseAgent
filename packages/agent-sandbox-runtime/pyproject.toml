@@ -1,0 +1,24 @@
+[project]
+name = "agent-sandbox-runtime"
+version = "0.1.0"
+description = "Local Docker sandbox runtime for agent execution with bounded lifetimes"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+agent-sandbox = "agent_sandbox_runtime.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_sandbox_runtime"]
+
+[tool.pytest.ini_options]
+markers = ["docker: requires a running Docker daemon (may pull public images)"]
+addopts = "-m 'not docker'"
+testpaths = ["tests"]
