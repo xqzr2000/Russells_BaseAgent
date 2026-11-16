@@ -79,6 +79,18 @@ The kernel runs inside the Codespace, in `workspace/<chat id>/` next to the uplo
 `runs/` is committed. Without an API key, the offline `fake-echo` model walks the same
 path with one canned EDA cell, which is handy for checking the plumbing.
 
+**Opening the notebook in Google Colab.** The downloaded notebook is written to run from
+the top on another machine:
+
+- After the imports there is a **Data files** cell listing the `data/` files the notebook
+  reads. In Colab it asks you to upload the missing ones; anywhere else it tells you to
+  put them in `data/` beside the notebook. Data files are never stored in the notebook.
+- Cells that raised an error are left out. The data scientist reruns a corrected cell,
+  and only cells that ran are kept, so **Runtime → Run all** doesn't stop halfway.
+
+In Colab: **File → Upload notebook** (or open it from GitHub once it's in a repo), then
+**Run all**.
+
 ### Fix and explain code
 
 1. Paste code in a ``` block (or attach a `.py`, `.js`, `.ts`, ... file) and ask, e.g.

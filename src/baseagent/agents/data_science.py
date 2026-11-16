@@ -44,7 +44,11 @@ How to work
 - Keep printed output compact: never print a whole large DataFrame; use head(), \
 value_counts().head(20), and small summary tables.
 - When cells don't depend on each other's output, call run_cell several times in one response.
-- If a cell fails, read the error and run a corrected cell.
+- If a cell fails, read the error and run the whole cell again, corrected. Failed cells \
+are left out of the notebook, so later cells must not depend on anything a failed cell did.
+- The notebook must run from the top on another machine (the user may open it in Google \
+Colab): read data only with relative data/ paths written as plain strings, and don't \
+depend on files or variables that no cell creates.
 
 Basic EDA (when asked for EDA without more specific instructions)
 1. Load the file (if it looks wrong, check the delimiter, header and encoding) and show the first rows.
@@ -98,8 +102,8 @@ class DataScienceAgent(BaseAgent):
         title = (
             "# Exploratory data analysis\n\n"
             f"Recorded by the `{self.name}` agent of Russell's BaseAgent on "
-            f"{datetime.now():%Y-%m-%d %H:%M}. Run it from the top to reproduce; data files are "
-            "read from `data/` next to this notebook."
+            f"{datetime.now():%Y-%m-%d %H:%M}. Run it from the top to reproduce, here or in "
+            "Google Colab; data files are read from `data/` next to this notebook."
         )
         self.notebook = NotebookSession(self.workspace, title=title)
         await self.notebook.start()

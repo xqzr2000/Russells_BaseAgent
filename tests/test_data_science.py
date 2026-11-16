@@ -14,6 +14,7 @@ from baseagent import AgentSettings, ScriptedLLM
 from baseagent.agents.coordinator import CoordinatorAgent
 from baseagent.agents.data_science import DataScienceAgent, notebook_filename
 from baseagent.sandbox.kernel import KernelSandbox
+from baseagent.sandbox.notebook import NotebookSession, data_check_code
 from baseagent.workspace import Workspace
 
 CSV = "name,kind,age\nRex,dog,3\nTom,cat,\nRex,dog,3\nIvy,fish,1\n"
@@ -109,8 +110,84 @@ async def test_data_science_agent_records_a_notebook(workspace):
     assert kinds[1] == ("code", "import numpy as np")
     assert ("markdown", "## Request") in kinds and ("markdown", "## Unique values") in kinds
     assert kinds[-1] == ("markdown", "## Findings")
-    assert nb.cells[4].outputs[0]["text"] == "(4, 3)\n"  # outputs are kept in the notebook
+    load = next(c for c in nb.cells if c.cell_type == "code" and "read_csv" in c.source)
+    assert load.outputs[0]["text"] == "(4, 3)\n"  # outputs are kept in the notebook
     assert agent.output_files()[0].title == "pets_eda.ipynb"
+
+    # The failed cell is left out, and the model is told so.
+    assert not any("not_a_method" in c.source for c in nb.cells)
+    assert "not kept in the notebook" in tool_ends[2]["content"]
+    assert agent.notebook.cells_run == 3 and agent.notebook.cells_failed == 1
+
+    # A data check cell follows the imports and names the file the notebook reads.
+    assert kinds[2] == ("markdown", "## Data files")
+    assert "DATA_FILES = ['data/pets.csv']" in nb.cells[3].source and not nb.cells[3].outputs
+
+    # The saved notebook runs from the top in a fresh kernel.
+    kernel = KernelSandbox()
+    await kernel.start(workspace.root)
+    try:
+        for cell in nb.cells:
+            if cell.cell_type == "code":
+                rerun = await kernel.execute(cell.source, timeout=60)
+                assert rerun.ok, rerun.text()
+    finally:
+        await kernel.shutdown()
+
+
+def run_data_check(files, monkeypatch, tmp_path, colab_upload=None):
+    """Run the data check cell's source in tmp_path, optionally with a fake google.colab."""
+    import sys
+    import types
+
+    monkeypatch.chdir(tmp_path)
+    for name in ("google", "google.colab", "google.colab.files"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    if colab_upload is not None:
+        google, colab = types.ModuleType("google"), types.ModuleType("google.colab")
+        colab.files = types.SimpleNamespace(upload=lambda: colab_upload)
+        google.colab = colab
+        monkeypatch.setitem(sys.modules, "google", google)
+        monkeypatch.setitem(sys.modules, "google.colab", colab)
+    else:
+        monkeypatch.setitem(sys.modules, "google.colab", None)  # import raises ImportError
+    exec(compile(data_check_code(files), "<data check>", "exec"), {})
+
+
+def test_data_check_cell_outside_colab(tmp_path, monkeypatch, capsys):
+    with pytest.raises(FileNotFoundError, match="Put these files beside this notebook"):
+        run_data_check(["data/train.csv"], monkeypatch, tmp_path)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "train.csv").write_text("a\n1\n")
+    run_data_check(["data/train.csv"], monkeypatch, tmp_path)
+    assert "Data files ready: data/train.csv" in capsys.readouterr().out
+
+
+def test_data_check_cell_uploads_in_colab(tmp_path, monkeypatch):
+    run_data_check(["data/train.csv"], monkeypatch, tmp_path, colab_upload={"train.csv": b"a\n1\n"})
+    assert (tmp_path / "data" / "train.csv").read_bytes() == b"a\n1\n"
+    with pytest.raises(FileNotFoundError, match="Still missing"):
+        run_data_check(["data/test.csv"], monkeypatch, tmp_path, colab_upload={"other.csv": b"x"})
+
+
+def test_notebook_lists_only_data_files_that_exist(workspace):
+    session = NotebookSession(workspace)
+    session.recorder.add_code("import pandas as pd", [], 1)
+    session.recorder.add_code(
+        "df = pd.read_csv('data/pets.csv')\nx = pd.read_csv(\"data/nope.csv\")\n"
+        "y = open('data/../../etc/passwd')\ndf.to_csv('out/pets.csv')", [], 2)
+    assert session.recorder.data_paths() == ["data/pets.csv", "data/nope.csv", "data/../../etc/passwd"]
+    assert session.data_files() == ["data/pets.csv"]
+    session.set_filename("x.ipynb")
+    nb = nbformat.read(session.save(), as_version=4)
+    nbformat.validate(nb)
+    assert [c.cell_type for c in nb.cells] == ["code", "markdown", "code", "code"]
+    assert len(session.recorder.cells) == 2  # the check is added on save, not recorded
+
+    plain = NotebookSession(workspace)  # no data files: no check cell
+    plain.recorder.add_code("1 + 1", [], 1)
+    plain.set_filename("y.ipynb")
+    assert len(nbformat.read(plain.save(), as_version=4).cells) == 1
 
 
 async def test_coordinator_delegates_and_specialist_keeps_its_kernel(workspace):
