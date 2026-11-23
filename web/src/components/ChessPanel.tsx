@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { Chessboard } from "react-chessboard";
 import type { BoardState } from "../types";
+import { Markdown } from "./Markdown";
 
 type Position = Record<string, { pieceType: string }>;
 
@@ -71,20 +72,21 @@ interface Props {
   busy: boolean; // the coach is mid-turn or a move is on its way, so the board is locked
   /** Send the move (UCI, e.g. "e7e8n") to the server; resolves to false if it was rejected. */
   onMove: (uci: string) => Promise<boolean>;
+  onHint: () => void;
+  onAdvance: () => void;
   onClaimDraw: () => void;
   onRewind: (to: "back" | "start") => void;
-  /** Send the coach a chat message (the Hint / Why / I'm confused buttons). */
+  /** Ask the coach to explain the current position. */
   onAsk: (message: string) => void;
   notice: string | null; // a short message, e.g. why a move was rejected
 }
 
 const ASK = {
-  hint: "Hint, please: what could I do next?",
   why: "Why did Black make that last move?",
   confused: "I'm confused. Please explain what's happening on the board in simple words, and tell me exactly what to do next.",
 };
 
-export function ChessPanel({ board, busy, onMove, onClaimDraw, onRewind, onAsk, notice }: Props) {
+export function ChessPanel({ board, busy, onMove, onHint, onAdvance, onClaimDraw, onRewind, onAsk, notice }: Props) {
   const [pending, setPending] = useState<{ from: string; to: string } | null>(null);
   const [promotion, setPromotion] = useState<{ from: string; to: string } | null>(null);
   const [selected, setSelected] = useState<string | null>(null); // a white piece picked up or clicked
@@ -179,159 +181,173 @@ export function ChessPanel({ board, busy, onMove, onClaimDraw, onRewind, onAsk, 
 
   const status = (() => {
     if (pending) return "Checking your move...";
-    if (busy) return "The coach is thinking...";
+    if (busy) return "Working…";
     if (board.game_over) return "Game over";
     if (promotion) return "Choose a piece for your pawn";
     if (canMove) return selected ? "Now click a square with a dot" : "Your move: drag a white piece, or click it";
-    return board.mode === "game" ? "Waiting..." : "Watch the board";
+    if (board.turn === "black") return "Black to move. Play the next engine move to continue.";
+    return "White to move. Try a hint or play the next engine move.";
   })();
   const pairs = movePairs(board.history);
   const blackMoved = /\bBlack (moved|captured|castled)\b/.test(board.narration);
-  const locked = busy || !!pending;
+  const locked = busy || !!pending || !!promotion;
+  const canUseEngine = !locked && !board.game_over && (board.can_suggest ?? true);
 
   return (
     <section className={`chess-panel ${collapsed ? "collapsed" : ""}`} aria-label="Chess board">
-      {collapsed ? (
-        <button className="chess-show" onClick={() => setCollapsed(false)}>
-          Show the board
-          <span className="muted small">{status}</span>
-        </button>
-      ) : (
-        <>
-          <div className="chess-board">
-            <Chessboard
-              options={{
-                id: "coach-board",
-                position,
-                boardOrientation: "white",
-                arrows: board.arrows.map((a) => ({
-                  startSquare: a.from,
-                  endSquare: a.to,
-                  color: ARROW_COLORS[a.color] ?? ARROW_COLORS.blue,
-                })),
-                squareStyles,
-                allowDrawingArrows: false,
-                allowDragging: canMove,
-                showAnimations: !reduceMotion,
-                animationDurationInMs: 220,
-                lightSquareStyle: { backgroundColor: "#e7e6da" },
-                darkSquareStyle: { backgroundColor: "#829680" },
-                boardStyle: { borderRadius: "6px", overflow: "hidden" },
-                dropSquareStyle: { boxShadow: "inset 0 0 0 3px rgba(34, 52, 42, 0.75)" },
-                canDragPiece: ({ piece }) => canMove && piece.pieceType.startsWith("w"),
-                onPieceDrag: ({ square }) => {
-                  if (canMove && square) setSelected(square);
-                },
-                onPieceDrop: ({ sourceSquare, targetSquare }) => {
-                  if (!targetSquare || targetSquare === sourceSquare) {
-                    setSelected(sourceSquare); // dropped back: keep showing its moves
-                    return false;
-                  }
-                  return tryMove(sourceSquare, targetSquare);
-                },
-                // Click a white piece to see its moves, then click a dot to move there.
-                onSquareClick: ({ piece, square }) => {
-                  if (!canMove) return;
-                  if (selected && selectedTargets.includes(square)) {
-                    tryMove(selected, square);
-                  } else if (piece?.pieceType.startsWith("w")) {
-                    setSelected(selected === square ? null : square);
-                  } else if (selected) {
-                    tryMove(selected, square);
-                  }
-                },
-              }}
-            />
-            {promotion && (
-              <div className="promotion" role="dialog" aria-label="Promote the pawn to">
-                <span className="promotion-title">Your pawn reached the end! It becomes a...</span>
-                <div className="promotion-choices">
-                  {PROMOTIONS.map((p) => (
-                    <button
-                      key={p.piece}
-                      className="promotion-choice"
-                      onClick={() => {
-                        const { from, to } = promotion;
-                        setPromotion(null);
-                        submit(from, to, p.piece);
-                      }}
-                      title={p.label}
-                      aria-label={p.label}
-                    >
-                      {p.glyph}
-                    </button>
-                  ))}
-                </div>
-                <button className="promotion-cancel" onClick={() => setPromotion(null)}>
-                  Cancel
-                </button>
-              </div>
-            )}
-          </div>
-          <div className="chess-side">
-            <div className="chess-head">
-              <span className={`chess-mode ${board.mode}`}>{board.mode === "game" ? "Game · you're White" : "Lesson"}</span>
-              <button className="icon-btn subtle-visible" onClick={() => setCollapsed(true)} aria-label="Hide the board" title="Hide the board">
-                <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden>
-                  <path d="M5 12.5 10 7.5l5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-            {board.caption && <p className="chess-caption">{board.caption}</p>}
-            {board.narration && <p className="chess-narration">{board.narration}</p>}
-            <p className={`chess-status ${canMove ? "your-move" : ""}`} aria-live="polite">
-              {status}
-            </p>
-            {(tip || notice) && (
-              <p className="chess-notice" role="alert">
-                {tip ?? notice}
-              </p>
-            )}
-            <div className="chess-actions">
-              <button className="chip-btn" onClick={() => onAsk(ASK.hint)} disabled={locked || board.game_over}>
-                💡 Hint
-              </button>
-              {blackMoved && (
-                <button className="chip-btn" onClick={() => onAsk(ASK.why)} disabled={locked}>
-                  Why did Black do that?
-                </button>
-              )}
-              <button className="chip-btn" onClick={() => onAsk(ASK.confused)} disabled={locked}>
-                I'm confused
-              </button>
-            </div>
-            {(board.can_step_back || board.can_restart || board.draw_claimable) && (
-              <div className="chess-actions">
-                {board.can_step_back && (
-                  <button className="chip-btn plain" onClick={() => onRewind("back")} disabled={locked} title="Take back your last move">
-                    ↶ {board.mode === "game" ? "Undo" : "Step back"}
+      {!collapsed && (
+        <div className="chess-board">
+          <Chessboard
+            options={{
+              id: "coach-board",
+              position,
+              boardOrientation: "white",
+              arrows: board.arrows.map((a) => ({
+                startSquare: a.from,
+                endSquare: a.to,
+                color: ARROW_COLORS[a.color] ?? ARROW_COLORS.blue,
+              })),
+              squareStyles,
+              allowDrawingArrows: false,
+              allowDragging: canMove,
+              showAnimations: !reduceMotion,
+              animationDurationInMs: 220,
+              lightSquareStyle: { backgroundColor: "#e7e6da" },
+              darkSquareStyle: { backgroundColor: "#829680" },
+              boardStyle: { borderRadius: "6px", overflow: "hidden" },
+              dropSquareStyle: { boxShadow: "inset 0 0 0 3px rgba(34, 52, 42, 0.75)" },
+              canDragPiece: ({ piece }) => canMove && piece.pieceType.startsWith("w"),
+              onPieceDrag: ({ square }) => {
+                if (canMove && square) setSelected(square);
+              },
+              onPieceDrop: ({ sourceSquare, targetSquare }) => {
+                if (!targetSquare || targetSquare === sourceSquare) {
+                  setSelected(sourceSquare); // dropped back: keep showing its moves
+                  return false;
+                }
+                return tryMove(sourceSquare, targetSquare);
+              },
+              // Click a white piece to see its moves, then click a dot to move there.
+              onSquareClick: ({ piece, square }) => {
+                if (!canMove) return;
+                if (selected && selectedTargets.includes(square)) {
+                  tryMove(selected, square);
+                } else if (piece?.pieceType.startsWith("w")) {
+                  setSelected(selected === square ? null : square);
+                } else if (selected) {
+                  tryMove(selected, square);
+                }
+              },
+            }}
+          />
+          {promotion && (
+            <div className="promotion" role="dialog" aria-label="Promote the pawn to">
+              <span className="promotion-title">Your pawn reached the end! It becomes a...</span>
+              <div className="promotion-choices">
+                {PROMOTIONS.map((p) => (
+                  <button
+                    key={p.piece}
+                    className="promotion-choice"
+                    onClick={() => {
+                      const { from, to } = promotion;
+                      setPromotion(null);
+                      submit(from, to, p.piece);
+                    }}
+                    title={p.label}
+                    aria-label={p.label}
+                  >
+                    {p.glyph}
                   </button>
-                )}
-                {board.can_restart && (
-                  <button className="chip-btn plain" onClick={() => onRewind("start")} disabled={locked} title="Back to the start of this lesson">
-                    ⟲ Restart lesson
-                  </button>
-                )}
-                {board.draw_claimable && (
-                  <button className="chip-btn plain" onClick={onClaimDraw} disabled={locked}>
-                    Claim draw
-                  </button>
-                )}
-              </div>
-            )}
-            {pairs.length > 0 && (
-              <ol className="chess-moves" aria-label="Moves">
-                {pairs.map((pair) => (
-                  <li key={pair}>{pair}</li>
                 ))}
-              </ol>
-            )}
-            <p className="chess-legend muted small">
-              <span className="swatch green" /> best <span className="swatch blue" /> idea <span className="swatch red" /> threat
-            </p>
-          </div>
-        </>
+              </div>
+              <button className="promotion-cancel" onClick={() => setPromotion(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
       )}
+      <div className="chess-side">
+        <div className="chess-head">
+          <span className="chess-mode">{board.mode === "game" ? "Game · you’re White" : "Lesson"}</span>
+          <button
+            type="button"
+            className="chip-btn"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            {collapsed ? "Show board" : "Hide board"}
+          </button>
+        </div>
+        <section className="chess-teaching" aria-label="Coach explanation">
+          <h2>Coach explanation</h2>
+          {board.explanation && <Markdown text={board.explanation} />}
+          {board.narration && <p className="chess-narration">{board.narration}</p>}
+          {board.caption && <p className="chess-caption">{board.caption}</p>}
+          <p className={`chess-status ${canMove ? "your-move" : ""}`} aria-live="polite">
+            {status}
+          </p>
+        </section>
+        <div className="chess-hint-region" aria-live="polite">
+          {board.hint && (
+            <div className="chess-hint">
+              <strong>{board.hint.source === "stockfish" ? "Stockfish" : "Practice engine"} · {board.hint.san}</strong>
+              <p>{board.hint.explanation}</p>
+              {board.hint.reply && <p className="muted">{board.hint.reply}</p>}
+            </div>
+          )}
+        </div>
+        {(tip || notice) && (
+          <p className="chess-notice" role="alert">
+            {tip ?? notice}
+          </p>
+        )}
+        <div className="chess-actions">
+          <button className="chip-btn" onClick={onHint} disabled={!canUseEngine}>
+            Hint
+          </button>
+          <button className="chip-btn" onClick={onAdvance} disabled={!canUseEngine}>
+            Play next move
+          </button>
+          {blackMoved && (
+            <button className="chip-btn" onClick={() => onAsk(ASK.why)} disabled={locked}>
+              Why did Black do that?
+            </button>
+          )}
+          <button className="chip-btn" onClick={() => onAsk(ASK.confused)} disabled={locked}>
+            I'm confused
+          </button>
+        </div>
+        {(board.can_step_back || board.can_restart || board.draw_claimable) && (
+          <div className="chess-actions">
+            {board.can_step_back && (
+              <button className="chip-btn plain" onClick={() => onRewind("back")} disabled={locked} title="Take back your last move">
+                ↶ {board.mode === "game" ? "Undo" : "Step back"}
+              </button>
+            )}
+            {board.can_restart && (
+              <button className="chip-btn plain" onClick={() => onRewind("start")} disabled={locked} title="Back to the start of this lesson">
+                ⟲ Restart lesson
+              </button>
+            )}
+            {board.draw_claimable && (
+              <button className="chip-btn plain" onClick={onClaimDraw} disabled={locked}>
+                Claim draw
+              </button>
+            )}
+          </div>
+        )}
+        {pairs.length > 0 && (
+          <ol className="chess-moves" aria-label="Moves">
+            {pairs.map((pair) => (
+              <li key={pair}>{pair}</li>
+            ))}
+          </ol>
+        )}
+        <p className="chess-legend muted small">
+          <span className="swatch green" /> Stockfish <span className="swatch blue" /> idea <span className="swatch red" /> threat
+        </p>
+      </div>
     </section>
   );
 }

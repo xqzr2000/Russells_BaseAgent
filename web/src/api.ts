@@ -43,6 +43,10 @@ export const api = {
   /** The user moved a piece on the chess board (UCI, e.g. "e2e4"). */
   chessMove: (id: string, move: string) =>
     json<ChessMoveResult>(`/api/sessions/${id}/chess/move`, { method: "POST", body: JSON.stringify({ move }) }),
+  chessHint: (id: string) =>
+    json<ChessMoveResult>(`/api/sessions/${id}/chess/hint`, { method: "POST" }),
+  chessAdvance: (id: string) =>
+    json<ChessMoveResult>(`/api/sessions/${id}/chess/advance`, { method: "POST" }),
   /** Take back the last move, or restart the lesson position. */
   chessRewind: (id: string, to: "back" | "start") =>
     json<ChessMoveResult>(`/api/sessions/${id}/chess/rewind`, { method: "POST", body: JSON.stringify({ to }) }),

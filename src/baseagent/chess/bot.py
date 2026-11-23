@@ -2,8 +2,7 @@
 
 It plays like the bot in the CMU 11-768 chess app (it never hangs a piece to
 an immediate recapture and finds mate in one, but sees nothing deeper), which
-makes it a fair first opponent for a beginner. Stockfish replaces it for the
-stronger levels.
+makes it useful for piece drills without kings and as a fallback when Stockfish is unavailable.
 """
 
 from __future__ import annotations

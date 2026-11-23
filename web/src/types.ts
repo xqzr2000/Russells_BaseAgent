@@ -27,6 +27,9 @@ export interface BoardState {
   game_over: boolean;
   draw_claimable: boolean; // threefold repetition or 50 moves: the user may claim a draw
   caption: string; // the coach's current instruction
+  explanation?: string; // the coach's latest explanation for this position
+  hint?: { uci: string; san: string; explanation: string; source: "stockfish" | "practice"; reply: string | null } | null;
+  can_suggest?: boolean;
   narration: string; // the last moves in plain words ("You moved your knight...")
   legal_moves: string[]; // UCI moves the user may play now (empty when the board is locked)
   can_step_back: boolean;

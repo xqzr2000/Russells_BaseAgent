@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import chess
 import pytest
@@ -11,6 +13,7 @@ from fastapi.testclient import TestClient
 from baseagent.agents.chess_coach import ChessCoachAgent
 from baseagent.chess import ChessError, ChessSession
 from baseagent.chess.bot import choose_move
+from baseagent.chess.engine import EngineMove, engine
 from baseagent.llm import FakeLLM, ScriptedLLM
 from baseagent.server.app import create_app
 
@@ -194,7 +197,8 @@ def test_coach_tools_publish_board_events_and_detail(tmp_path):
         events = parse_sse(client.post(f"/api/sessions/{session['id']}/messages",
                                        json={"content": "How does the knight move?"}).text)
         boards = [e["board"] for e in events if e["type"] == "board"]
-        assert len(boards) == 3  # set_position, show_piece_moves, the legal arrow
+        assert len(boards) == 4  # position, dots, arrow, and the final explanation
+        assert boards[-1]["explanation"] == "The dots show where the knight can go."
         assert boards[-1]["arrows"] == [{"from": "d5", "to": "f6", "color": "blue"}]
         errors = [e for e in events if e["type"] == "tool_end" and e["is_error"]]
         assert len(errors) == 1 and "not a legal move" in errors[0]["content"]
@@ -205,6 +209,7 @@ def test_coach_tools_publish_board_events_and_detail(tmp_path):
 
         detail = client.get(f"/api/sessions/{session['id']}").json()
         assert detail["board"]["interactive"] and len(detail["board"]["dots"]) == 8
+        assert detail["board"]["explanation"] == boards[-1]["explanation"]
 
         moved = client.post(f"/api/sessions/{session['id']}/chess/move", json={"move": "d5e7"}).json()
         assert moved["needs_coach"] and moved["message"] == "I moved my knight from d5 to e7 (Ne7)."
@@ -233,6 +238,89 @@ def test_game_moves_get_bot_replies_without_the_model(tmp_path):
         assert len(moved["board"]["history"]) == 2 and len(llm.requests) == calls_before
         bad = client.post(f"/api/sessions/{session['id']}/chess/move", json={"move": "e4e6"})
         assert bad.status_code == 422
+
+
+def test_hint_and_demo_moves_use_engine_for_both_sides_without_a_model(tmp_path, monkeypatch):
+    searches = []
+
+    def choose(board, *, beginner=False):
+        searches.append((board.turn, beginner))
+        if board.turn == chess.WHITE:
+            return EngineMove(chess.Move.from_uci("g1f3"), "stockfish", chess.Move.from_uci("d7d5"))
+        uci = "d5e4" if beginner else "d7d5"
+        return EngineMove(chess.Move.from_uci(uci), "stockfish")
+
+    monkeypatch.setattr(engine, "choose", choose)
+    llm = ScriptedLLM([
+        {"content": "", "tool_calls": [call("new_game", {})]},
+        {"content": "Start by looking at the centre four squares."},
+    ])
+    with client_with(llm, tmp_path) as client:
+        sid = client.post("/api/sessions", json={"agent": "chess_coach"}).json()["id"]
+        base = f"/api/sessions/{sid}"
+        client.post(f"{base}/messages", json={"content": "Let's play"})
+        calls_before = len(llm.requests)
+
+        hint = client.post(f"{base}/chess/hint").json()["board"]
+        assert hint["hint"] == {"uci": "g1f3", "san": "Nf3", "source": "stockfish",
+                                "explanation": "Move your knight from g1 to f3.",
+                                "reply": "Black could move its pawn from d7 to d5."}
+        assert hint["arrows"] == [{"from": "g1", "to": "f3", "color": "green"}]
+        assert hint["history"] == [] and hint["explanation"].startswith("Start by looking")
+
+        advanced = client.post(f"{base}/chess/advance").json()["board"]
+        assert advanced["turn"] == "black" and advanced["history"] == ["Nf3"]
+        assert advanced["hint"] is None and not advanced["arrows"] and not advanced["explanation"]
+
+        typed = parse_sse(client.post(f"{base}/messages", json={"content": "Hint, please?"}).text)
+        assert typed[0]["model"] == "none"
+        assert "Black's pawn from d7 to d5" in typed[-1]["final_text"]
+        assert client.get(base).json()["board"]["hint"]["san"] == "d5"
+
+        advanced = client.post(f"{base}/chess/advance").json()["board"]
+        assert advanced["history"] == ["Nf3", "d5"] and advanced["interactive"]
+        assert not advanced["hint"]
+        played = client.post(f"{base}/chess/move", json={"move": "e2e4"})
+        assert played.status_code == 200
+        assert len(llm.requests) == calls_before
+        assert searches == [(chess.WHITE, False), (chess.BLACK, False), (chess.BLACK, True)]
+
+
+def test_engine_search_keeps_current_board_visible_and_serializes_actions(tmp_path, monkeypatch):
+    searching, release = Event(), Event()
+
+    def choose(board, *, beginner=False):
+        assert board.turn == chess.BLACK and beginner
+        searching.set()
+        assert release.wait(5)
+        return EngineMove(chess.Move.from_uci("e7e5"), "stockfish")
+
+    monkeypatch.setattr(engine, "choose", choose)
+    llm = ScriptedLLM([
+        {"content": "", "tool_calls": [call("new_game", {})]},
+        {"content": "White plays first."},
+    ])
+    with client_with(llm, tmp_path) as client, ThreadPoolExecutor() as pool:
+        sid = client.post("/api/sessions", json={"agent": "chess_coach"}).json()["id"]
+        base = f"/api/sessions/{sid}"
+        client.post(f"{base}/messages", json={"content": "Let's play"})
+        pending = pool.submit(client.post, f"{base}/chess/move", json={"move": "e2e4"})
+        try:
+            assert searching.wait(5)
+            assert client.get(base).json()["board"]["fen"] == chess.STARTING_FEN
+            assert client.post(f"{base}/chess/hint").status_code == 409
+            assert client.post(f"{base}/messages", json={"content": "Explain"}).status_code == 409
+        finally:
+            release.set()
+        assert pending.result(timeout=5).json()["board"]["history"] == ["e4", "e5"]
+
+
+def test_hint_in_kingless_drill_uses_practice_engine():
+    board = ChessSession()
+    board.set_position("8/8/8/3N4/8/8/8/8 w", user_moves_next=True)
+    hint = board.show_hint()
+    assert hint.source == "practice" and chess.Move.from_uci(hint.uci) in board.board.legal_moves
+    assert board.view()["arrows"][0]["color"] == "blue"
 
 
 def test_move_endpoint_needs_a_chess_chat(tmp_path):

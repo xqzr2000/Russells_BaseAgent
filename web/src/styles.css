@@ -583,21 +583,27 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .segmented input:checked + span { background: var(--accent-surface); color: var(--accent); }
 .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.board-wrap { flex: none; max-height: 48dvh; overflow: auto; }
+.board-wrap { flex: none; max-height: 59dvh; overflow: auto; }
 .chess-panel {
   --board: clamp(9rem, 37dvh, 21rem);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, min(var(--board), 54%)) minmax(0, 1fr);
   gap: 1rem;
-  align-items: flex-start;
+  align-items: start;
   padding: 0.85rem 0;
   border-bottom: 1px solid var(--line);
 }
 
 .chess-board { width: var(--board); max-width: 100%; flex: none; position: relative; }
-.chess-side { display: grid; gap: 0.5rem; min-width: 0; flex: 1; }
+.chess-side { display: grid; gap: 0.6rem; min-width: 0; }
 .chess-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .chess-mode { color: var(--accent); font-size: 0.875rem; font-weight: 650; }
-.chess-side p { margin: 0; }
+.chess-teaching { display: grid; gap: 0.45rem; padding-left: 0.75rem; border-left: 2px solid var(--line); }
+.chess-teaching h2 { margin: 0; color: var(--muted); font-size: 0.875rem; font-weight: 650; }
+.chess-teaching .markdown { max-height: 8rem; overflow: auto; overflow-wrap: anywhere; }
+.chess-teaching > p, .chess-hint p { margin: 0; }
+.chess-hint { padding: 0.5rem 0.65rem; border-radius: var(--radius); background: var(--accent-surface); font-size: 0.875rem; }
+.chess-hint strong { color: var(--accent); }
 .chess-caption { font-weight: 650; }
 .chess-status, .chess-narration { color: var(--muted); font-size: 0.875rem; }
 .chess-status.your-move { color: var(--accent); }
@@ -620,8 +626,7 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 .swatch.green { background: #77b985; }
 .swatch.blue { background: #929ceb; }
 .swatch.red { background: #e18b82; }
-.chess-panel.collapsed { padding-block: 0.5rem; }
-.chess-show { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; border: 0; background: transparent; color: var(--accent); text-align: left; font-weight: 650; }
+.chess-panel.collapsed { grid-template-columns: minmax(0, 1fr); padding-block: 0.5rem; }
 .promotion {
   position: absolute;
   inset: 0;
@@ -665,8 +670,9 @@ fieldset.field { min-width: 0; margin: 0; padding: 0; border: 0; }
 @media (max-width: 500px) {
   .workspace-body.is-empty { padding-block: 1.5rem 2.5rem; }
   .examples { grid-template-columns: minmax(0, 1fr); }
-  .chess-panel { --board: min(60vw, 30dvh); flex-direction: column; align-items: center; }
-  .chess-side { width: 100%; }
+  .board-wrap { max-height: 68dvh; }
+  .chess-panel { --board: min(62vw, 29dvh); grid-template-columns: minmax(0, 1fr); }
+  .chess-board { justify-self: center; }
   .panel-foot { align-items: flex-start; }
   .tool-args { display: none; }
 }

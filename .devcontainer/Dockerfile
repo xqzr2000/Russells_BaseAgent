@@ -7,3 +7,7 @@ FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
 RUN grep -rl "dl.yarnpkg.com" /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null \
       | xargs -r rm -f \
  && rm -f /usr/share/keyrings/yarn*.gpg /etc/apt/trusted.gpg.d/yarn*.gpg
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends stockfish \
+ && rm -rf /var/lib/apt/lists/*
