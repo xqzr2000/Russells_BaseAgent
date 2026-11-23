@@ -169,6 +169,10 @@ code, pre { font-family: var(--mono); }
 
 .sidebar-link:hover:not(:disabled), .history-item:hover { background: var(--surface); color: var(--text); }
 .agent-link[aria-pressed="true"] { background: var(--accent-surface); color: var(--accent); }
+.agent-icon { display: grid; place-items: center; flex: none; width: 1.625rem; }
+.jack-sidebar-label { display: grid; line-height: 1.25; }
+.jack-role { color: var(--quiet); font-size: 0.8125rem; }
+
 .history-item[data-current="true"] { background: var(--surface); }
 .history-item[data-current="true"] .history-link { color: var(--text); }
 .history-item { display: flex; align-items: center; border-radius: var(--radius); }
@@ -371,6 +375,32 @@ code, pre { font-family: var(--mono); }
 .agent-msg { min-width: 0; overflow-wrap: anywhere; }
 .response-label { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; font-size: 0.875rem; font-weight: 650; }
 .response-label .brand-mark { width: 1.5rem; height: 1.5rem; border-radius: 0.35rem; }
+
+.jack-avatar {
+  display: grid;
+  grid-template: 100% / 100%;
+  place-items: center;
+  flex: none;
+  width: 1.625rem;
+  height: 1.625rem;
+}
+
+.jack-avatar img { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; }
+.jack-response-label .jack-avatar { width: 2.125rem; height: 2.125rem; }
+.jack-response-label .jack-portrait { width: 1.625rem; height: 1.625rem; }
+.jack-status { color: var(--muted); font-weight: 400; }
+
+.jack-sniffing { opacity: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .jack-avatar-working .jack-seated { animation: jack-crossfade 8s ease-in-out infinite; }
+  .jack-avatar-working .jack-sniffing { animation: jack-crossfade 8s ease-in-out -4s infinite; }
+}
+
+@keyframes jack-crossfade {
+  0%, 35%, 100% { opacity: 1; }
+  50%, 85% { opacity: 0; }
+}
 
 .handoff-divider {
   display: flex;
