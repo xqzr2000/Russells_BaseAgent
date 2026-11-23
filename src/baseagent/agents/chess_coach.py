@@ -10,7 +10,8 @@ from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.chess import ChessError, ChessSession
 from baseagent.events import Board, Usage
-from baseagent.tools import ToolContext, ToolError, tool
+from baseagent.handoff import COORDINATOR_NAME
+from baseagent.tools import ToolContext, ToolError, ToolResult, tool
 
 QUICK_HINT = re.compile(
     r"(?:hint(?:,? please)?(?:: what could I do next)?|(?:(?:can|could) you )?give me a hint|"
@@ -18,9 +19,54 @@ QUICK_HINT = re.compile(
     re.IGNORECASE,
 )
 
+ASK_FOR_JACK = re.compile(
+    r"^(?:please[\s,]+)?(?:(?:(?:(?:let|et) me|let's|(?:can|could|may) I|"
+    r"I (?:want|would like) to|I'd like to)\s+)?(?:talk|speak|chat)\s+(?:to|with)|"
+    r"(?:go |switch )?back to|switch to|(?:send|pass|take) me (?:back )?to)"
+    r"\s+(?:Jack(?!'s\b)|the coordinator)\b",
+    re.IGNORECASE,
+)
+LEAVE_CHESS = re.compile(
+    r"^(?:please[\s,]+)?(?:(?:let's )?(?:stop|quit|leave|exit) (?:playing )?chess|no more chess|"
+    r"(?:we're|we are|I'm|I am) (?:done (?:with|playing) chess|not playing chess any ?more)|"
+    r"I don't want to play chess any ?more)\b",
+    re.IGNORECASE,
+)
+THANKS = {"please", "thanks", "thank you"}
+
+
+def jack_follow_up(message: str) -> str | None:
+    """Return the topic to pass to Jack, an empty string for a switch, or None."""
+    remaining = message.strip()
+    asked_for_jack = False
+    leaving_chess = False
+    while remaining:
+        command = remaining.replace("’", "'")
+        if match := ASK_FOR_JACK.match(command):
+            asked_for_jack = True
+        elif match := LEAVE_CHESS.match(command):
+            leaving_chess = True
+        else:
+            break
+        remaining = remaining[match.end():].lstrip(" \t\r\n,.!?:;–—")
+        remaining = re.sub(r"^(?:and|then)\s+", "", remaining, flags=re.IGNORECASE)
+    if remaining.lower().rstrip(".!?") in THANKS:
+        remaining = ""
+    if asked_for_jack:
+        return re.sub(r"^about\s+", "", remaining, flags=re.IGNORECASE)
+    return "" if leaving_chess and not remaining else None
+
+
+def request_jack(agent: BaseAgent, follow_up: str) -> str:
+    agent.state["handoff"] = {"to": COORDINATOR_NAME, "message": follow_up}
+    return "I'll hand you back to Jack."
+
+
 SYSTEM_PROMPT = """\
-You are Jack's chess coach in Russell's BaseAgent chat room: a warm, patient teacher who \
-can teach anyone, from a person who has never seen a chess board to a strong club player.
+You are the Chess coach in Russell's BaseAgent chat room, a warm, patient chess teacher.
+Jack is the coordinator and a separate agent. If the user asks to speak to Jack or wants to stop \
+discussing chess, call the handoff_to_jack tool immediately. The tool switches the active agent in this chat. \
+Use board tools and teaching instructions only for users who want to continue with chess.
 
 How the board works (the user sees all of this):
 - The board is above the chat. The user always plays White; the board is seen from White's \
@@ -101,6 +147,9 @@ class ChessCoachAgent(BaseAgent):
         return SYSTEM_PROMPT.format(state=self.chess.describe())
 
     async def run(self, user_message: str, via: str | None = None) -> TurnResult:
+        follow_up = jack_follow_up(user_message)
+        if follow_up is not None:
+            return await self.reply_without_model(user_message, request_jack(self, follow_up), via=via)
         if not QUICK_HINT.fullmatch(user_message.strip()):
             return await super().run(user_message, via=via)
         try:
@@ -125,7 +174,7 @@ class ChessCoachAgent(BaseAgent):
 
     def get_tools(self):
         return [set_position, set_caption, show_move, show_piece_moves, show_attacks, show_attackers,
-                suggest_move, highlight, clear_overlay, new_game]
+                suggest_move, highlight, clear_overlay, new_game, handoff_to_jack]
 
     def ui_state(self) -> dict[str, Any]:
         return {"board": self.chess.view()}
@@ -152,6 +201,16 @@ async def _apply(ctx: ToolContext, change) -> Any:
     coach.chess.save_lesson_start()  # drawings made before the first move come back on "Restart"
     await coach.publish_board(ctx)
     return result
+
+
+@tool(exclusive=True)
+def handoff_to_jack(follow_up: str = "", ctx: ToolContext = None) -> ToolResult:
+    """Switch the chat to Jack, the coordinator, when the user wants to leave chess.
+
+    Args:
+        follow_up: The user's new question or topic for Jack, if any. Omit for a plain switch.
+    """
+    return ToolResult(request_jack(_coach(ctx), follow_up.strip()), end_turn=True)
 
 
 @tool(exclusive=True)

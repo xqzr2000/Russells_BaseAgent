@@ -10,7 +10,7 @@ import chess
 import pytest
 from fastapi.testclient import TestClient
 
-from baseagent.agents.chess_coach import ChessCoachAgent
+from baseagent.agents.chess_coach import ChessCoachAgent, jack_follow_up
 from baseagent.chess import ChessError, ChessSession
 from baseagent.chess.bot import choose_move
 from baseagent.chess.engine import EngineMove, engine
@@ -394,6 +394,83 @@ def test_claim_draw_endpoint(tmp_path):
         client.post(f"/api/sessions/{session['id']}/messages", json={"content": "Let's play"})
         refused = client.post(f"/api/sessions/{session['id']}/chess/claim-draw")
         assert refused.status_code == 422 and "can't be claimed" in refused.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("message", "follow_up"),
+    [
+        ("et me talk to Jack, we are not playing chess anymore", ""),
+        ("We’re done with chess. Could I speak to Jack, please?", ""),
+        ("I don't want to play chess anymore.", ""),
+        ("Let’s talk to Jack, please, no more chess.", ""),
+        ("Switch to the coordinator: what time is it?", "what time is it?"),
+        ("Let me talk to Jack:\n```python\nif True:\n    print(1)\n```", "```python\nif True:\n    print(1)\n```"),
+        ("We’re done playing chess. Review my last move.", None),
+        ("Let me talk to Jack’s chess coach.", None),
+        ("Don't switch to Jack; I want to keep playing chess.", None),
+    ],
+)
+def test_jack_switch_requests(message, follow_up):
+    assert jack_follow_up(message) == follow_up
+
+
+@pytest.mark.parametrize("start_agent", ["coordinator", "chess_coach"])
+def test_explicit_jack_request_switches_agents_without_a_model(tmp_path, start_agent):
+    messages = []
+    if start_agent == "coordinator":
+        messages.append({"content": "", "tool_calls": [call("handoff", {"agent": "chess_coach"})]})
+    messages += [
+        {"content": "", "tool_calls": [call("new_game", {})]},
+        {"content": "White plays first."},
+        {"content": "", "tool_calls": [call("handoff", {"agent": "chess_coach"})]},
+        {"content": "Let's pick up where we left off."},
+    ]
+    llm = ScriptedLLM(messages)
+    user_message = "et me talk to Jack, we are not playing chess anymore"
+
+    with client_with(llm, tmp_path) as client:
+        sid = client.post("/api/sessions", json={"agent": start_agent}).json()["id"]
+        base = f"/api/sessions/{sid}"
+        client.post(f"{base}/messages", json={"content": "Let's play chess"})
+        played = client.post(f"{base}/chess/move", json={"move": "e2e4"}).json()["board"]
+        assert played["mode"] == "game" and played["history"][0] == "e4"
+        before = len(llm.requests)
+
+        events = parse_sse(client.post(f"{base}/messages", json={"content": user_message}).text)
+        handoffs = [e for e in events if e["type"] == "handoff"]
+        assert len(handoffs) == 1
+        assert handoffs[0]["from_agent"] == "chess_coach"
+        assert handoffs[0]["to_agent"] == "coordinator" and handoffs[0]["ui_state"] == {}
+        turns = [e for e in events if e["type"] == "turn_start"]
+        assert turns[0]["user_message"] == user_message
+        assert turns[1]["agent"] == "coordinator" and turns[1]["via"] == "chess_coach"
+        assert events[-1]["final_text"].startswith("Jack here.")
+        assert not any(e["type"] in {"board", "tool_start"} for e in events)
+        assert len(llm.requests) == before
+
+        detail = client.get(base).json()
+        assert detail["id"] == sid and detail["active_agent"]["name"] == "coordinator"
+        assert "board" not in detail
+
+        resumed = parse_sse(client.post(f"{base}/messages", json={"content": "Let's resume chess"}).text)
+        returned = next(e["ui_state"]["board"] for e in resumed if e["type"] == "handoff")
+        assert returned["history"] == played["history"]
+        assert returned["fen"] == played["fen"]
+
+
+def test_coach_handoff_tool_can_switch_a_direct_chess_chat_and_forward_new_topic(tmp_path):
+    llm = ScriptedLLM([
+        {"content": "", "tool_calls": [call("handoff_to_jack", {"follow_up": "Help me write a note."})]},
+        {"content": "Jack here. Who is the note for?"},
+    ])
+    with client_with(llm, tmp_path) as client:
+        sid = client.post("/api/sessions", json={"agent": "chess_coach"}).json()["id"]
+        events = parse_sse(client.post(f"/api/sessions/{sid}/messages", json={
+            "content": "I’d rather talk to the terrier who runs this chat. Help me write a note.",
+        }).text)
+        assert [e["to_agent"] for e in events if e["type"] == "handoff"] == ["coordinator"]
+        assert llm.requests[1]["messages"][-1]["content"] == "Help me write a note."
+        assert events[-1]["final_text"] == "Jack here. Who is the note for?"
 
 
 # ------------------------------------------------------------------ handoff from the main chat
