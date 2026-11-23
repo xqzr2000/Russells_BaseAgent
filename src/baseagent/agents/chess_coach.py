@@ -1,22 +1,22 @@
-"""The chess coach: teaches chess on a board shown at the top of the chat.
-
-See docs/CHESS_COACH_PLAN.md. The coach sets up lesson positions, draws
-arrows, dots and highlights, suggests moves, and starts games against a very
-easy bot; Black answers the user's moves automatically in lessons and games. Every tool goes through ``ChessSession``, which
-checks the chess, and each change is sent to the chat room as a ``board``
-event. The model reads the live position in its system prompt on every step,
-so it always sees moves the user made on the board in between.
-"""
+"""The chess coach explains lessons and positions beside the teaching board."""
 
 from __future__ import annotations
 
+import asyncio
+import re
 from typing import Any, Literal
 
-from baseagent.agent import BaseAgent
+from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.chess import ChessError, ChessSession
-from baseagent.events import Board
+from baseagent.events import Board, Usage
 from baseagent.tools import ToolContext, ToolError, tool
+
+QUICK_HINT = re.compile(
+    r"(?:hint(?:,? please)?(?:: what could I do next)?|(?:(?:can|could) you )?give me a hint|"
+    r"(?:what (?:could|should) I (?:do|play)|what(?:'s| is) (?:the|my) (?:best|next) move)(?: next)?)[.!?]*",
+    re.IGNORECASE,
+)
 
 SYSTEM_PROMPT = """\
 You are Jack's chess coach in Russell's BaseAgent chat room: a warm, patient teacher who \
@@ -26,27 +26,27 @@ How the board works (the user sees all of this):
 - The board is above the chat. The user always plays White; the board is seen from White's \
 side. The user moves by dragging a piece or by clicking it and then a square; picking up a \
 piece shows dots where it can go.
-- Black answers every move of the user automatically and instantly, in lessons and games \
-alike. You never have to move for Black. In a lesson, if Black has nothing to move it is \
-simply White's turn again; with `black_reply="pass"` Black never moves (for drills).
-- Beside the board: the instruction line (the `caption` you set), a plain-English line \
-saying what the last moves were, and buttons. "Hint", "Why did Black do that?" and \
-"I'm confused" send you a message. "Step back" / "Restart" (lessons) and "Undo" (games) \
-change the board without asking you; the live position below is always the truth.
+- Stockfish chooses moves for either side. It replies as Black after the user moves. The user \
+can select “Play next move” to watch one engine move for the current side. In single-piece drills, \
+Black may pass and the practice engine can suggest a legal move without kings.
+- Beside the board, the user always sees your latest explanation, the instruction (caption), \
+what the last moves did, and controls. “Hint” shows the engine's move directly. “Why did Black do that?” \
+and “I'm confused” ask you to explain the current position.
+- “Step back”, “Restart” and “Undo” change the board. Read the live position below before answering.
 
 Tools:
-- `set_position` shows a position. Lesson positions may leave out the kings (e.g. \
+- `set_position` shows a position. Lesson positions may leave out the kings (for example, \
 "8/8/8/3N4/8/8/8/8 w" is a lone knight on d5). Set `user_moves_next=true` to let the user move.
-- `set_caption` changes the instruction line without changing the position.
-- `show_move` draws an arrow: kind "best" (green), "hint" or "idea" (blue), "threat" (red, \
-a move the other side could play).
+- `set_caption` changes the instruction beside the board without changing the position.
+- `show_move` draws arrows for illustration or for an example the user named. Use `suggest_move` \
+whenever you need a recommended move or continuation.
 - `show_piece_moves` puts dots on every square a piece can reach.
 - `show_attacks` highlights what a piece attacks; `show_attackers` highlights the pieces that \
 attack a square (its attackers and defenders). Use these for any claim about attacks or defence.
-- `suggest_move` finds a sensible move for the side to move with a short look-ahead and draws \
-it as a blue arrow. Use it for "Hint" (say why the move helps, in simple words).
+- `suggest_move` gets the engine's move for the side to move and draws it. Use the move and \
+any reply it returns as the facts you explain. Present possible replies as possibilities.
 - `highlight` only tints squares for emphasis; `clear_overlay` removes arrows, dots and highlights.
-- `new_game` starts a full game against a very easy bot. Start it right away when the user \
+- `new_game` starts a full game with Stockfish as Black. Start it right away when the user \
 asks to play. You only hear about a game when the user writes or the game ends. A repeated \
 position or 50 quiet moves doesn't end the game by itself: the user may press "Claim draw".
 
@@ -65,10 +65,9 @@ after you have explained it, e.g. "the knight jump to f3 (`Nf3`)".
 below): praise a correct try, or gently say what went wrong and let them try again.
 - "I'm confused": slow down, explain the current board in one or two simple sentences, \
 and give one very small, concrete next step.
-- Never invent chess facts. Name only moves in legal_moves_for_side_to_move or ones a tool \
-accepted. Show attacks and threats with tools before talking about them. There is no strong \
-engine yet: don't call a move "the best" unless it is obvious (mate in one, winning a free \
-piece).
+- Explain the position, the engine's suggestion and what the learner should try next in simple \
+words. Never choose a move or invent a line yourself. Use the board tools to establish attacks, \
+defenders or threats, and only name engine moves that came from `suggest_move` or the live board.
 - When a game ends, congratulate or console them and offer another game or a lesson.
 
 Live position (updated after every move):
@@ -96,9 +95,33 @@ class ChessCoachAgent(BaseAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.chess = ChessSession()
+        self._hint_turn = False
 
     def system_prompt(self) -> str:
         return SYSTEM_PROMPT.format(state=self.chess.describe())
+
+    async def run(self, user_message: str, via: str | None = None) -> TurnResult:
+        if not QUICK_HINT.fullmatch(user_message.strip()):
+            return await super().run(user_message, via=via)
+        try:
+            hint = await asyncio.to_thread(self.chess.calculate_hint)
+        except ChessError as exc:
+            text = str(exc)
+        else:
+            self.chess.show_hint(hint)
+            text = " ".join(part for part in (hint.explanation, hint.reply) if part)
+        self._hint_turn = True
+        try:
+            return await self.reply_without_model(user_message, text, via=via)
+        finally:
+            self._hint_turn = False
+
+    async def _finish(self, turn: int, final_text: str, steps: int, stop_reason: str, usage: Usage) -> None:
+        if stop_reason == "final" and final_text.strip() and not self.state.get("handoff"):
+            if not self._hint_turn:
+                self.chess.explanation = final_text.strip()
+            await self.publish_board()
+        await super()._finish(turn, final_text, steps, stop_reason, usage)
 
     def get_tools(self):
         return [set_position, set_caption, show_move, show_piece_moves, show_attacks, show_attackers,
@@ -139,7 +162,7 @@ async def set_position(fen: str = "start", caption: str = "", user_moves_next: b
     Args:
         fen: A FEN string, "start" for the opening position, or just the piece placement
             plus side to move for a lesson (kings may be left out), e.g. "8/8/8/3N4/8/8/8/8 w".
-        caption: One short line shown under the board, e.g. "The knight jumps in an L-shape".
+        caption: One short line shown beside the board, e.g. "The knight jumps in an L-shape".
         user_moves_next: True unlocks the board so the user can try a move. White must be to move.
         black_reply: "auto" (default): Black answers each user move automatically. "pass": Black
             never moves, so the user can keep moving White (drills such as touring a piece).
@@ -165,41 +188,44 @@ async def set_caption(caption: str, ctx: ToolContext = None) -> str:
     return await _apply(ctx, change)
 
 
-@tool
+@tool(exclusive=True)
 async def suggest_move(caption: str | None = None, ctx: ToolContext = None) -> str:
-    """Find a sensible move for the side to move (a short 2-move look-ahead that counts
-    material: it grabs free pieces, avoids losing them, and finds mate in one) and draw it as a
-    blue hint arrow. Not a strong engine: present it as "a good idea", not "the best move".
+    """Get and draw the engine's move for the side to move and a possible reply.
 
     Args:
-        caption: Optional line beside the board; omit to keep the current one.
+        caption: Optional short instruction beside the board.
     """
+    coach = _coach(ctx)
+    try:
+        hint = await asyncio.to_thread(coach.chess.calculate_hint)
+    except ChessError as exc:
+        raise ToolError(str(exc)) from exc
 
     def change(chess):
-        move, words = chess.suggest()
-        chess.add_arrow(move, "hint")
+        chess.show_hint(hint)
         if caption is not None:
             chess.caption = caption
-        return f"Suggested {chess.board.san(move)}: {words}"
+        source = "Stockfish" if hint.source == "stockfish" else "Practice engine"
+        return f"{source} suggests {hint.san}. {hint.explanation} {hint.reply or ''}".strip()
 
     return await _apply(ctx, change)
 
 
 @tool
-async def show_move(move: str, kind: Literal["best", "hint", "idea", "threat"] = "idea",
+async def show_move(move: str, kind: Literal["hint", "idea", "threat"] = "idea",
                     caption: str | None = None, keep_other_arrows: bool = True,
                     ctx: ToolContext = None) -> str:
     """Draw an arrow for a move without playing it.
 
     Args:
         move: The move in SAN (Nf3) or UCI (g1f3).
-        kind: best = green and hint = blue (a move for the side to move); threat = red (a move
-            the side NOT to move could play); idea = blue (either side).
-        caption: Optional line under the board; omit to keep the current one.
+        kind: hint = blue (an exercise move for the side to move); threat = red (a move
+            the other side could play); idea = blue (either side).
+        caption: Optional line beside the board; omit to keep the current one.
         keep_other_arrows: False removes the arrows already drawn.
     """
 
-    side = {"threat": "opponent", "best": "to_move", "hint": "to_move"}.get(kind, "either")
+    side = {"threat": "opponent", "hint": "to_move"}.get(kind, "either")
 
     def change(chess):
         parsed, board = chess.find_move(move, side)
@@ -220,7 +246,7 @@ async def show_piece_moves(square: str, caption: str | None = None, ctx: ToolCon
 
     Args:
         square: The piece's square, e.g. d5.
-        caption: Optional line under the board; omit to keep the current one.
+        caption: Optional line beside the board; omit to keep the current one.
     """
 
     def change(chess):
@@ -240,7 +266,7 @@ async def show_attacks(square: str, caption: str | None = None, ctx: ToolContext
 
     Args:
         square: The attacking piece's square, e.g. f3.
-        caption: Optional line under the board; omit to keep the current one.
+        caption: Optional line beside the board; omit to keep the current one.
     """
 
     def change(chess):
@@ -262,7 +288,7 @@ async def show_attackers(square: str, caption: str | None = None, ctx: ToolConte
 
     Args:
         square: The square in question, e.g. e5.
-        caption: Optional line under the board; omit to keep the current one.
+        caption: Optional line beside the board; omit to keep the current one.
     """
 
     def change(chess):
@@ -288,7 +314,7 @@ async def highlight(squares: list[str], color: Literal["yellow", "green", "red",
     Args:
         squares: Square names, e.g. ["e4", "d5"].
         color: yellow, green, red or blue.
-        caption: Optional line under the board; omit to keep the current one.
+        caption: Optional line beside the board; omit to keep the current one.
     """
 
     def change(chess):
@@ -309,7 +335,6 @@ async def clear_overlay(ctx: ToolContext = None) -> str:
 
 @tool(exclusive=True)
 async def new_game(ctx: ToolContext = None) -> str:
-    """Start a full game from the opening position. The user plays White; a very easy bot
-    answers each move as Black automatically."""
+    """Start a game with the user as White and an automatic engine reply as Black."""
     await _apply(ctx, lambda chess: chess.new_game())
-    return "New game started. The user (White) moves first; the bot replies automatically."
+    return "New game started. The user (White) moves first; the engine replies automatically."

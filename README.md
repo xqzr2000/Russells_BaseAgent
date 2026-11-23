@@ -61,11 +61,22 @@ class DataScienceAgent(BaseAgent):
 | **Coordinator** (default) | Jack the coordinator, answers simple things and delegates specialized work to any agent marked `delegatable`. |
 | **Data scientist** | Do basic EDA in a Jupyter kernel. Returns a summary and a downloadable `.ipynb`. |
 | **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
-| **Chess coach** | Say *teach me chess*, and see the demo video. |
+| **Chess coach** | Say *teach me chess* to open a guided board with Stockfish hints and an explanation beside it. |
 | **Code agent** | Paste code (in a ``` block) or attach a file and ask *fix this*: OpenCode fixes and explains it in a sandbox with a free model. |
 
 > Jack the Coordinator is a Jack Russell Terrier. I'm building him to be interactive, with an LLM handling the intelligence and `Three.js` bringing him to life.
 > Wish me luck!
+
+### Chess teaching demo
+
+Say *teach me chess* for a piece drill or *let’s play chess* to play as White.
+Select **Hint** for a move and its arrow without waiting for a chat reply.
+**Play next move** plays one engine move for the side to move so you can follow both sides.
+The coach’s latest explanation, move narration, and next step stay next to the board.
+
+Stockfish is installed in new Codespaces. Rebuild an existing container to pick it up.
+For local runs, install Stockfish and put it on your PATH or set `STOCKFISH_PATH` to the executable.
+The built-in practice engine covers lessons without kings and installations without Stockfish.
 
 ### EDA on a CSV
 

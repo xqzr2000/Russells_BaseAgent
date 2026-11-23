@@ -8,6 +8,8 @@
     PUT  /api/sessions/{id}/files/{name}   upload a data file (raw body) to data/
     GET  /api/sessions/{id}/files/{path}   download a file from the chat's workspace
     POST /api/sessions/{id}/chess/move     the user moved a piece on the chess coach's board
+    POST /api/sessions/{id}/chess/hint     suggest a move without a model call
+    POST /api/sessions/{id}/chess/advance  play one engine move for the side to move
     POST /api/sessions/{id}/chess/rewind   step back a move or restart the lesson position
     GET  /api/agents | /api/models | /api/config
     POST /internal/code-runs           the code agent's sandboxed OpenCode runs a snippet
@@ -23,7 +25,9 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -37,6 +41,7 @@ from pydantic import BaseModel, Field
 from baseagent.agent import AgentSettings
 from baseagent.agents import discover
 from baseagent.chess import ChessError, ChessSession
+from baseagent.chess.engine import engine
 from baseagent.codeagent.bridge import RunBridge, make_router, shared_bridge
 from baseagent.events import event_to_dict
 from baseagent.llm import FAKE_MODEL, LLMClient, RoutingLLM
@@ -114,8 +119,11 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         discover()
-        yield
-        await manager.close_all()
+        with engine.reuse():
+            try:
+                yield
+            finally:
+                await manager.close_all()
 
     app = FastAPI(title="Russell's BaseAgent", lifespan=lifespan)
     app.state.manager = manager
@@ -263,58 +271,54 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             raise HTTPException(404, "File not found.")
         return FileResponse(file, filename=file.name)  # Content-Disposition: attachment
 
-    @app.post("/api/sessions/{session_id}/chess/move")
-    async def chess_move(session_id: str, body: ChessMove):
-        """Play the user's move on the chat's board. In a game the bot answers at once
-        (no model call); ``needs_coach`` says whether the UI should report the move to the
-        coach as a chat message (lesson moves, the end of a game)."""
+    async def update_chess(session_id: str, change: Callable[[ChessSession], tuple[bool, str]]):
         session = session_or_404(session_id)
         board = chess_board_of(session)
-        if session.busy:
-            raise HTTPException(409, "The coach is still talking. Move once it has finished.")
+        if session.busy or session.chess_busy:
+            raise HTTPException(409, "The chess coach or engine is still working. Try again shortly.")
+        session.chess_busy = True
         try:
-            outcome = board.user_move(body.move)
+            # Keep the last complete board visible while the engine searches in a worker.
+            updated = deepcopy(board)
+            needs_coach, message = await asyncio.to_thread(change, updated)
+            session_or_404(session_id).current.chess = updated
         except ChessError as exc:
             raise HTTPException(422, str(exc)) from exc
+        finally:
+            session.chess_busy = False
         session.updated = time.time()
-        return {"board": board.view(), "needs_coach": outcome.needs_coach,
-                "message": outcome.message(), "game_over": outcome.game_over}
+        return {"board": updated.view(), "needs_coach": needs_coach,
+                "message": message, "game_over": updated.game_over}
+
+    @app.post("/api/sessions/{session_id}/chess/move")
+    async def chess_move(session_id: str, body: ChessMove):
+        def change(board: ChessSession):
+            outcome = board.user_move(body.move)
+            return outcome.needs_coach, outcome.message()
+
+        return await update_chess(session_id, change)
+
+    @app.post("/api/sessions/{session_id}/chess/hint")
+    async def chess_hint(session_id: str):
+        return await update_chess(session_id, lambda board: (False, board.show_hint().explanation))
+
+    @app.post("/api/sessions/{session_id}/chess/advance")
+    async def chess_advance(session_id: str):
+        return await update_chess(session_id, lambda board: (False, board.advance()))
 
     @app.post("/api/sessions/{session_id}/chess/rewind")
     async def chess_rewind(session_id: str, body: ChessRewind):
-        """Take back the user's last move (lessons and games) or restart the lesson position.
-        No model call: the coach sees the live position the next time it answers."""
-        session = session_or_404(session_id)
-        board = chess_board_of(session)
-        if session.busy:
-            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
-        try:
-            message = board.rewind(body.to)
-        except ChessError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        session.updated = time.time()
-        return {"board": board.view(), "needs_coach": False, "message": message, "game_over": False}
+        return await update_chess(session_id, lambda board: (False, board.rewind(body.to)))
 
     @app.post("/api/sessions/{session_id}/chess/claim-draw")
     async def chess_claim_draw(session_id: str):
-        """The user claims a draw (threefold repetition or the 50-move rule)."""
-        session = session_or_404(session_id)
-        board = chess_board_of(session)
-        if session.busy:
-            raise HTTPException(409, "The coach is still talking. Try again once it has finished.")
-        try:
-            reason = board.claim_draw()
-        except ChessError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        session.updated = time.time()
-        return {"board": board.view(), "needs_coach": True,
-                "message": f"I claimed a draw ({reason}).", "game_over": True}
+        return await update_chess(session_id, lambda board: (True, f"I claimed a draw ({board.claim_draw()})."))
 
     @app.post("/api/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: SendMessage):
         session = session_or_404(session_id)
-        if session.busy:
-            raise HTTPException(409, "The agent is still working on the previous message.")
+        if session.busy or session.chess_busy:
+            raise HTTPException(409, "The agent or chess engine is still working on the previous action.")
         if not body.content.strip():
             raise HTTPException(422, "Message is empty.")
         files: list[str] = []

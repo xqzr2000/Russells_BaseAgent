@@ -281,10 +281,7 @@ export default function App() {
     setChessNotice(null);
     setMoving(true);
     try {
-      const before = board?.history.length ?? 0;
       const result = await request();
-      // Let the user's own move settle before the bot's reply animates in.
-      if (result.board.history.length > before + 1) await new Promise((r) => setTimeout(r, 380));
       if (shownSession.current !== sessionId) return true; // the user switched chats meanwhile
       setBoard(result.board);
       refreshSessions();
@@ -301,6 +298,12 @@ export default function App() {
 
   /** The user dragged a piece (UCI, e.g. "e2e4", or "e7e8n" for a promotion). */
   const chessMove = (uci: string) => (session ? applyChess(session.id, () => api.chessMove(session.id, uci)) : Promise.resolve(false));
+  const requestHint = () => {
+    if (session) applyChess(session.id, () => api.chessHint(session.id));
+  };
+  const advanceBoard = () => {
+    if (session) applyChess(session.id, () => api.chessAdvance(session.id));
+  };
   const claimDraw = () => {
     if (session) applyChess(session.id, () => api.claimDraw(session.id));
   };
@@ -417,6 +420,8 @@ export default function App() {
                 board={board}
                 busy={sessionLocked}
                 onMove={chessMove}
+                onHint={requestHint}
+                onAdvance={advanceBoard}
                 onClaimDraw={claimDraw}
                 onRewind={rewindBoard}
                 onAsk={send}

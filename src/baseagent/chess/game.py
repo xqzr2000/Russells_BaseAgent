@@ -12,7 +12,7 @@ Two modes for now:
              Black answers each move automatically (``black_reply="auto"``), or
              never moves so White can keep practising (``"pass"``). The user can
              step back or restart the lesson position (``rewind``).
-    game     a full game: the user is White, the bot replies as Black. The user
+    game     a full game: the user is White, the engine replies as Black. The user
              can take a move back (``rewind("back")``).
 
 Every move is also described in plain words (``narration``) for beginners.
@@ -20,12 +20,12 @@ Every move is also described in plain words (``narration``) for beginners.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 import chess
 
-from baseagent.chess.bot import choose_move
+from baseagent.chess.engine import engine
 
 Mode = Literal["lesson", "game"]
 BlackReply = Literal["auto", "pass"]
@@ -61,12 +61,23 @@ class MoveOutcome:
         return text
 
 
+@dataclass(frozen=True)
+class Hint:
+    uci: str
+    san: str
+    explanation: str
+    source: Literal["stockfish", "practice"]
+    reply: str | None
+
+
 @dataclass
 class ChessSession:
     board: chess.Board = field(default_factory=chess.Board)
     mode: Mode = "lesson"
     user_can_move: bool = False
     caption: str = ""
+    explanation: str = ""
+    hint: Hint | None = None
     arrows: list[dict[str, str]] = field(default_factory=list)
     highlights: list[dict[str, str]] = field(default_factory=list)
     dots: list[str] = field(default_factory=list)
@@ -92,6 +103,7 @@ class ChessSession:
         self.user_can_move = user_moves_next
         self.black_reply = black_reply
         self.caption = caption
+        self.explanation = ""
         self.narration = ""
         self.last_move = None
         self.clear_overlay()
@@ -105,7 +117,7 @@ class ChessSession:
                                  "dots": list(self.dots), "user_can_move": self.user_can_move}
 
     def new_game(self) -> None:
-        """Start a full game from the opening position: the user is White, the bot Black."""
+        """Start a full game from the opening position: the user is White, the engine Black."""
 
         self.board = chess.Board()
         self.mode = "game"
@@ -113,6 +125,7 @@ class ChessSession:
         self.user_can_move = True
         self.black_reply = "auto"
         self.caption = "New game: you play White. Make your first move."
+        self.explanation = ""
         self.narration = ""
         self.last_move = None
         self.lesson_start = None
@@ -185,7 +198,7 @@ class ChessSession:
         raise ChessError(f"{text} is not a legal move for {who} in this position.")
 
     def user_move(self, text: str) -> MoveOutcome:
-        """Play the user's (White's) move; in a game the bot answers at once."""
+        """Play the user's (White's) move; in a game the engine replies as Black."""
 
         if not self.user_can_move:
             raise ChessError("The board is locked right now. Wait for the coach.")
@@ -203,7 +216,7 @@ class ChessSession:
         # A move that ends the game gets no reply (the CMU chess-app bug).
         if not self.game_over:
             if self.mode == "game" or (self.black_reply == "auto" and any(self.board.legal_moves)):
-                reply = choose_move(self.board)
+                reply = engine.choose(self.board, beginner=True).move
                 outcome.reply_san = self.board.san(reply)
                 outcome.reply_words = describe_move(self.board, reply, "Black")
                 narration.append(outcome.reply_words)
@@ -239,6 +252,8 @@ class ChessSession:
             self.dots = list(start["dots"])
             self.user_can_move = start["user_can_move"]
             self.last_move, self.draw_claimed = None, False
+            self.explanation = ""
+            self.hint = None
             self.narration = "Back to the start of this lesson."
             return self.narration
         if not self.board.move_stack:
@@ -258,6 +273,8 @@ class ChessSession:
             self.caption = self._status_line()
         moves = [m for m in self.board.move_stack if m]
         self.last_move = moves[-1].uci() if moves else None
+        self.explanation = ""
+        self.hint = None
         self.narration = "Took your last move back. Try again!"
         return self.narration
 
@@ -272,12 +289,15 @@ class ChessSession:
                   else "the 50-move rule")
         self.draw_claimed = True
         self.user_can_move = False
+        self.explanation = ""
+        self.hint = None
         self.caption = f"Draw claimed ({reason})."
         return reason
 
     def _push(self, move: chess.Move) -> None:
         self.board.push(move)
         self.last_move = move.uci()
+        self.explanation = ""
         self.clear_overlay()
 
     def _other_side_board(self) -> chess.Board:
@@ -287,17 +307,51 @@ class ChessSession:
         return other
 
     def suggest(self) -> tuple[chess.Move, str]:
-        """A sensible move for the side to move (the bot's 2-ply search) and what it does in words."""
+        """A legal suggestion for the side to move, described in plain words."""
+        hint = self.calculate_hint()
+        return chess.Move.from_uci(hint.uci), hint.explanation
 
-        if not any(self.board.legal_moves):
+    def calculate_hint(self) -> Hint:
+        if self.game_over or not any(self.board.legal_moves):
             raise ChessError("There is no legal move to suggest here.")
-        move = choose_move(self.board)
-        return move, describe_move(self.board, move, "suggest")
+        if self.hint is not None:
+            return self.hint
+        choice = engine.choose(self.board)
+        explanation = describe_move(self.board, choice.move, "suggest")
+        reply = None
+        if choice.reply:
+            after = self.board.copy(stack=False)
+            after.push(choice.move)
+            if choice.reply in after.legal_moves:
+                reply = describe_move(after, choice.reply, "reply")
+        return Hint(choice.move.uci(), self.board.san(choice.move), explanation, choice.source, reply)
+
+    def show_hint(self, hint: Hint | None = None) -> Hint:
+        hint = hint or self.calculate_hint()
+        move = chess.Move.from_uci(hint.uci)
+        self.add_arrow(move, "best" if hint.source == "stockfish" else "hint")
+        self.hint = hint
+        return hint
+
+    def advance(self) -> str:
+        """Play the suggested move for either side, one demo step at a time."""
+        move, _ = self.suggest()
+        words = describe_move(self.board, move, _side(self.board))
+        white_moved = self.board.turn == chess.WHITE
+        self._push(move)
+        if (self.mode == "lesson" and white_moved and not self.game_over
+                and (self.black_reply == "pass" or not any(self.board.legal_moves))):
+            self.board.push(chess.Move.null())
+        if self.mode == "game":
+            self.caption = self._status_line()
+        self.narration = words
+        return words
 
     # ------------------------------------------------------------ overlay
 
     def clear_overlay(self) -> None:
         self.arrows, self.highlights, self.dots = [], [], []
+        self.hint = None
 
     def add_arrow(self, move: chess.Move, kind: ArrowKind) -> None:
         arrow = {"from": chess.square_name(move.from_square), "to": chess.square_name(move.to_square),
@@ -415,6 +469,9 @@ class ChessSession:
             "game_over": self.game_over,
             "draw_claimable": self.draw_claimable,
             "caption": self.caption,
+            "explanation": self.explanation,
+            "hint": asdict(self.hint) if self.hint else None,
+            "can_suggest": not self.game_over and bool(self.board.legal_moves),
             "narration": self.narration,
             # Where each white piece may go, so the board can show dots when one is picked up.
             "legal_moves": sorted(m.uci() for m in self.board.legal_moves) if self.interactive else [],
@@ -465,13 +522,14 @@ class ChessSession:
             f"legal_moves_for_side_to_move: {legal}",
             *overlay,
             f"caption: {self.caption or '(none)'}",
+            f"engine_hint: {self.hint.san} ({self.hint.explanation})" if self.hint else "engine_hint: (none)",
             "</chess_state>",
         ]
         return "\n".join(lines)
 
 
 def describe_move(board: chess.Board, move: chess.Move,
-                  who: Literal["you", "I", "Black", "suggest"]) -> str:
+                  who: Literal["you", "I", "White", "Black", "suggest", "reply"]) -> str:
     """A move in plain words for a beginner, e.g. "You moved your knight from g1 to f3."
 
     ``board`` is the position before the move. ``who="suggest"`` phrases it as advice for
@@ -480,12 +538,15 @@ def describe_move(board: chess.Board, move: chess.Move,
 
     mover_is_black = board.turn == chess.BLACK
     if who == "suggest":
-        own = "its" if mover_is_black else "your"
+        own = "Black's" if mover_is_black else "your"
         castled, captured_verb, moved_verb, became = "Castle", "Capture", "Move", "becomes"
         subject = ""
+    elif who == "reply":
+        subject, own = f"{_side(board)} could ", "its"
+        castled, captured_verb, moved_verb, became = "castle", "capture", "move", "becomes"
     else:
-        subject = {"you": "You", "I": "I", "Black": "Black"}[who] + " "
-        own = {"you": "your", "I": "my", "Black": "its"}[who]
+        subject = {"you": "You", "I": "I", "White": "White", "Black": "Black"}[who] + " "
+        own = {"you": "your", "I": "my", "White": "its", "Black": "its"}[who]
         castled, captured_verb, moved_verb, became = "castled", "captured", "moved", "became"
     other = "White's" if mover_is_black else "Black's"
     piece = board.piece_at(move.from_square)

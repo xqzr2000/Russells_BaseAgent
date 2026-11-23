@@ -41,6 +41,7 @@ class Session:
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
     task: asyncio.Task | None = None
+    chess_busy: bool = False
     specialists: dict[str, BaseAgent] = field(default_factory=dict)
     active: str | None = None  # name of the specialist answering now; None = self.agent
     events: list[dict[str, Any]] = field(default_factory=list)  # every agent's events, in order

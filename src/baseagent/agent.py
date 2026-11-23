@@ -282,7 +282,7 @@ class BaseAgent:
         await self._finish(turn, final_text, steps, stop_reason, usage)
         return TurnResult(final_text, steps, stop_reason, usage)
 
-    async def reply_without_model(self, user_message: str, text: str) -> TurnResult:
+    async def reply_without_model(self, user_message: str, text: str, *, via: str | None = None) -> TurnResult:
         """A complete turn with a fixed reply and no model call (e.g. a canned answer).
 
         Emits the same events as a normal one-step turn and records both messages
@@ -292,7 +292,7 @@ class BaseAgent:
         self.turn += 1
         turn = self.turn
         await self.emit(ev.TurnStart(turn=turn, user_message=user_message,
-                                     model=NO_MODEL, agent=self.name))
+                                     model=NO_MODEL, agent=self.name, via=via))
         self.memory.add({"role": "user", "content": user_message})
         await self.emit(ev.StepStart(turn=turn, step=1))
         self.memory.add({"role": "assistant", "content": text})
