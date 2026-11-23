@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { api, streamTurn } from "./api";
 import { fenceIfCode } from "./codeLanguage";
+import { ChatSidebar } from "./components/ChatSidebar";
 import { ChessPanel } from "./components/ChessPanel";
 import { FileIcon, formatSize } from "./components/FileIcon";
-import { Meadow, firstImpression, jackForced } from "./components/Meadow";
+import { Icon } from "./components/Icon";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TurnView } from "./components/TurnView";
 import { buildTurns } from "./turns";
@@ -43,14 +44,6 @@ function saveDefaults(settings: AgentSettings) {
   }
 }
 
-function timeAgo(seconds: number): string {
-  const diff = Date.now() / 1000 - seconds;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} h ago`;
-  return new Date(seconds * 1000).toLocaleDateString();
-}
-
 export default function App() {
   const [config, setConfig] = useState<ServerConfig | null>(null);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -72,29 +65,22 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [changingSession, setChangingSession] = useState(false);
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<HTMLFormElement>(null);
+  const sidebarToggle = useRef<HTMLButtonElement>(null);
+  const sidebarClose = useRef<HTMLButtonElement>(null);
   const stickToBottom = useRef(true);
-  /*
-   * Jack's first-impression video: "pending" until we know whether the server
-   * already has chats, "armed" while waiting for the first keystroke,
-   * "playing" until it fades back to the still, then "off" for good.
-   */
-  const [jack, setJack] = useState<"pending" | "armed" | "playing" | "off">(firstImpression ? "pending" : "off");
-  const jackDone = useCallback(() => setJack("off"), []);
 
   const agent = agents.find((a) => a.name === agentName) ?? agents[0];
-  const settings: AgentSettings | null = session?.settings
-    ? session.settings
-    : agent
-      ? { ...agent.default_settings, ...pendingSettings }
-      : null;
+  const settings = useMemo(
+    () => session?.settings ?? (agent ? { ...agent.default_settings, ...pendingSettings } : null),
+    [session?.settings, agent, pendingSettings],
+  );
   const turns = useMemo(() => buildTurns(events), [events]);
 
   const refreshSessions = useCallback(() => api.sessions().then(setSessions).catch(() => {}), []);
@@ -117,33 +103,32 @@ export default function App() {
         if (preferred) setAgentName(preferred.name);
       })
       .catch(() => setError("Can't reach the agent server. Start it with `make dev`, then reload this page."));
-    api
-      .sessions()
-      .then((list) => {
-        setSessions(list);
-        // A first impression only: if there are chats already, stay on the still.
-        setJack((j) => (j === "pending" ? (list.length && !jackForced ? "off" : "armed") : j));
-      })
-      .catch(() => setJack((j) => (j === "pending" ? "off" : j)));
+    refreshSessions();
     loadModels();
-  }, [loadModels]);
+  }, [loadModels, refreshSessions]);
 
-  // Opening a chat or sending without typing (an example prompt) spends the first impression.
-  useEffect(() => {
-    if (jack === "armed" && turns.length > 0) setJack("off");
-  }, [jack, turns.length]);
-
-  const closePanels = useCallback(() => {
+  const closeSidebar = useCallback(() => {
     setSidebarOpen(false);
-    setSettingsOpen(false);
+    requestAnimationFrame(() => sidebarToggle.current?.focus());
   }, []);
 
   useEffect(() => {
     if (!sidebarOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSidebarOpen(false);
+    sidebarClose.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeSidebar();
+    };
+    const mobile = window.matchMedia("(max-width: 760px)");
+    const onResize = () => {
+      if (!mobile.matches) setSidebarOpen(false);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sidebarOpen]);
+    mobile.addEventListener("change", onResize);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      mobile.removeEventListener("change", onResize);
+    };
+  }, [sidebarOpen, closeSidebar]);
 
   // A file dropped outside the drop zone must not make the browser navigate away.
   useEffect(() => {
@@ -159,7 +144,7 @@ export default function App() {
   useEffect(() => {
     const el = scroller.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [events, board, busy]);
 
   useEffect(() => {
     if (!chessNotice) return;
@@ -179,19 +164,21 @@ export default function App() {
     setActiveAgent(detail?.active_agent ?? null);
   };
 
+  const sessionLocked = busy || uploading || moving || changingSession;
   const newChat = (name = agentName) => {
-    if (moving) return;
+    if (sessionLocked) return;
     showSession(null);
     setEvents([]);
     setChessNotice(null);
     setAgentName(name);
     setAttachments([]);
     setError(null);
-    setSidebarOpen(false);
+    if (sidebarOpen) closeSidebar();
   };
 
   const openSession = async (id: string) => {
-    if (busy || uploading || moving) return;
+    if (sessionLocked) return;
+    setChangingSession(true);
     try {
       const detail = await api.session(id);
       showSession(detail);
@@ -200,18 +187,29 @@ export default function App() {
       setAgentName(detail.agent);
       setAttachments([]);
       setError(null);
-      setSidebarOpen(false);
-      setJack((j) => (j === "armed" || j === "pending" ? "off" : j));
+      if (sidebarOpen) closeSidebar();
       stickToBottom.current = true;
     } catch (e) {
+      if (sidebarOpen) closeSidebar();
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChangingSession(false);
     }
   };
 
   const deleteSession = async (id: string) => {
-    await api.deleteSession(id).catch(() => {});
-    if (session?.id === id) newChat();
-    refreshSessions();
+    if (sessionLocked) return;
+    setChangingSession(true);
+    try {
+      await api.deleteSession(id);
+      if (session?.id === id) newChat();
+      await refreshSessions();
+    } catch (e) {
+      if (sidebarOpen) closeSidebar();
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChangingSession(false);
+    }
   };
 
   /** The open chat, created on first use (sending a message or attaching a file). */
@@ -224,7 +222,7 @@ export default function App() {
   };
 
   const uploadFiles = async (files: File[]) => {
-    if (!files.length || uploading || !agent) return;
+    if (!files.length || sessionLocked || !agent) return;
     setError(null);
     setUploading(true);
     try {
@@ -243,7 +241,7 @@ export default function App() {
 
   const send = async (text: string) => {
     const content = text.trim();
-    if (!content || busy || uploading || !agent) return;
+    if (!content || sessionLocked || !agent) return;
     const pending = attachments;
     setError(null);
     setBusy(true);
@@ -279,7 +277,7 @@ export default function App() {
 
   /** Apply a board change from the server, if the user is still looking at that chat. */
   const applyChess = async (sessionId: string, request: () => Promise<ChessMoveResult>): Promise<boolean> => {
-    if (busy || moving) return false;
+    if (sessionLocked) return false;
     setChessNotice(null);
     setMoving(true);
     try {
@@ -312,7 +310,7 @@ export default function App() {
 
   const dropHandlers = {
     onDragEnter: (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (!hasFiles(e) || sessionLocked || settingsOpen || !agent) return;
       e.preventDefault();
       dragDepth.current += 1;
       setDragging(true);
@@ -320,7 +318,7 @@ export default function App() {
     onDragOver: (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
+      e.dataTransfer.dropEffect = sessionLocked || settingsOpen || !agent ? "none" : "copy";
     },
     onDragLeave: (e: DragEvent) => {
       if (!hasFiles(e)) return;
@@ -332,7 +330,7 @@ export default function App() {
       e.preventDefault();
       dragDepth.current = 0;
       setDragging(false);
-      uploadFiles(Array.from(e.dataTransfer.files));
+      if (!settingsOpen) uploadFiles(Array.from(e.dataTransfer.files));
     },
   };
 
@@ -349,277 +347,208 @@ export default function App() {
     saveDefaults(next);
   };
 
-  const keyMissing = config && !config.openai_key_configured;
-  const hasChat = turns.length > 0;
-  const showDialog = hasChat || board !== null;
-  // After a handoff (e.g. to the chess coach), the pill and placeholder name the agent now talking.
+  const showConversation = turns.length > 0 || board !== null || busy;
   const talkingTo = activeAgent?.title ?? agent?.title;
 
   return (
     <div className="app" {...dropHandlers}>
-      <Meadow armed={jack === "armed" || jack === "playing"} play={jack === "playing"} onDone={jackDone} />
       {dragging && (
-        <div className="drop-overlay" aria-hidden>
+        <div className="drop-overlay" aria-hidden="true">
           <div className="drop-card">
             <FileIcon />
-            Drop a data file to attach it
-            <span className="muted small">CSV, TSV, Excel, JSON or Parquet</span>
+            Drop files to attach them
           </div>
         </div>
       )}
 
-      {/* Two frosted pills float over the meadow: chats (top left) and model + settings (top right). */}
-      <header className="hud">
-        <button
-          className={`pill chats-pill ${sidebarOpen ? "is-open" : ""}`}
-          onClick={() => {
-            setSettingsOpen(false);
-            setSidebarOpen((v) => !v);
-          }}
-          aria-expanded={sidebarOpen}
-          aria-label={`Chats and agents (talking to: ${talkingTo ?? "none"})`}
-        >
-          <svg className="chevron" viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-            <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span className="pill-text">{talkingTo ?? "BaseAgent"}</span>
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={closeSidebar} aria-hidden="true" />}
+      <aside id="chat-sidebar" className={`sidebar ${sidebarOpen ? "is-open" : ""}`} aria-label="Chat navigation">
+        <button ref={sidebarClose} type="button" className="icon-btn sidebar-close" onClick={closeSidebar} aria-label="Close chat navigation">
+          <Icon name="close" />
         </button>
-        <button
-          className={`pill model-pill ${settingsOpen ? "is-open" : ""}`}
-          onClick={() => {
-            setSidebarOpen(false);
-            setSettingsOpen((v) => !v);
-          }}
-          aria-expanded={settingsOpen}
-          title="Change model and settings"
-        >
-          <span className={`dot ${keyMissing && settings?.model !== config?.fake_model ? "warn" : ""}`} aria-hidden />
-          <span className="pill-text model-name">{settings?.model ?? "..."}</span>
-          {settings?.reasoning_effort && <span className="chip-extra">{settings.reasoning_effort}</span>}
-          <svg className="gear" viewBox="0 0 20 20" width="17" height="17" aria-hidden>
-            <path
-              d="M10 12.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2Zm6.3-1.4.1-1.2-.1-1.2 1.6-1.3-1.6-2.8-2 .7a6.3 6.3 0 0 0-2-1.2L12 2.1H8.8l-.4 2.1a6.3 6.3 0 0 0-2 1.2l-2-.7-1.6 2.8 1.6 1.3-.1 1.2.1 1.2-1.6 1.3 1.6 2.8 2-.7c.6.5 1.3.9 2 1.2l.4 2.1H12l.4-2.1c.7-.3 1.4-.7 2-1.2l2 .7 1.6-2.8-1.7-1.3Z"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <span className="sr-only">Settings</span>
-        </button>
-      </header>
+        <ChatSidebar
+          agents={agents}
+          agent={agent}
+          sessions={sessions}
+          sessionId={session?.id}
+          locked={sessionLocked}
+          offline={config?.openai_key_configured === false}
+          onNew={newChat}
+          onOpen={openSession}
+          onDelete={deleteSession}
+        />
+      </aside>
 
-      {/* The frosted dialog panel: only once there's a conversation (or a chess board). */}
-      <div className={`dialog ${board ? "has-board" : ""} ${showDialog ? "is-shown" : ""}`} ref={dialogRef} aria-hidden={!showDialog}>
-        {board && (
-          <ChessPanel
-            board={board}
-            busy={busy || moving}
-            onMove={chessMove}
-            onClaimDraw={claimDraw}
-            onRewind={rewindBoard}
-            onAsk={(message) => send(message)}
-            notice={chessNotice}
-          />
-        )}
-        <div className="conversation" ref={scroller} onScroll={onScroll}>
-          <div className="column">
-            {turns.map((turn, i) => (
-              <TurnView
-                key={turn.index}
-                turn={turn}
-                live={busy && i === turns.length - 1}
-                agentTitle={agents.find((a) => a.name === turn.agent)?.title}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <footer className="composer-wrap">
-        <div className="column">
-          {!hasChat && agent && (
-            <div className={`starter ${draft || busy ? "is-quiet" : ""}`}>
-              {keyMissing && (
-                <p className="note note-warning starter-note">
-                  No OpenAI key found, so chats use the offline <code>{config?.fake_model}</code> model. Add{" "}
-                  <code>OPENAI_API_KEY</code> as a Codespaces secret and rebuild the container to use real models.
-                </p>
-              )}
-              {agent.examples.length > 0 && (
-                <div className="examples">
-                  {agent.examples.map((ex) => (
-                    <button key={ex} className="example" onClick={() => send(ex)} disabled={busy}>
-                      {ex}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          {error && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          {(attachments.length > 0 || uploading) && (
-            <div className="pending-files">
-              {attachments.map((file) => (
-                <span key={file.path} className="pending-file">
-                  <FileIcon />
-                  <span className="pending-name">{file.name}</span>
-                  <span className="muted">{formatSize(file.size)}</span>
-                  <button
-                    type="button"
-                    className="chip-x"
-                    onClick={() => setAttachments((prev) => prev.filter((a) => a.path !== file.path))}
-                    aria-label={`Remove ${file.name}`}
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-              {uploading && <span className="pending-file is-uploading">Uploading...</span>}
-            </div>
-          )}
-          <form
-            ref={composerRef}
-            className="composer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              send(draft);
-            }}
+      <main className="workspace" inert={sidebarOpen}>
+        <header className="workspace-header">
+          <button
+            ref={sidebarToggle}
+            type="button"
+            className="icon-btn sidebar-toggle"
+            aria-label="Open chat navigation"
+            aria-controls="chat-sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen(true)}
           >
-            <button
-              type="button"
-              className="icon-btn attach"
-              onClick={() => fileInput.current?.click()}
-              disabled={uploading || !agent}
-              aria-label="Attach a data file"
-              title="Attach a data file (or drag it into the chat)"
-            >
-              <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden>
-                <path
-                  d="M13.5 6.5 8 12a1.6 1.6 0 0 0 2.3 2.3l5.6-5.6a3.2 3.2 0 0 0-4.5-4.5L5.6 10a4.8 4.8 0 0 0 6.8 6.8l4.1-4.1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-            <input
-              ref={fileInput}
-              type="file"
-              multiple
-              accept={UPLOAD_ACCEPT}
-              hidden
-              onChange={(e) => {
-                uploadFiles(Array.from(e.target.files ?? []));
-                e.target.value = "";
-              }}
-            />
-            <textarea
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                // Jack's first impression starts on the first keystroke of a fresh chat.
-                if (jack === "armed" && e.target.value && !hasChat) setJack("playing");
-              }}
-              onPaste={(e) => {
-                // Pasted code goes into a ``` block with its language, so the code agent
-                // reads it exactly as pasted.
-                const fenced = fenceIfCode(e.clipboardData.getData("text/plain"));
-                if (!fenced) return;
-                e.preventDefault();
-                const el = e.currentTarget;
-                const before = draft.slice(0, el.selectionStart);
-                const after = draft.slice(el.selectionEnd);
-                const head = before + (before && !before.endsWith("\n") ? "\n" : "") + fenced + "\n";
-                const next = head + after.replace(/^\n/, "");
-                setDraft(next);
-                if (jack === "armed" && !hasChat) setJack("playing");
-                requestAnimationFrame(() => el.setSelectionRange(head.length, head.length));
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  send(draft);
-                }
-              }}
-              placeholder={
-                attachments.length ? "Ask about the attached file, e.g. Do EDA on it, or Fix this code" : `Message ${talkingTo ?? "the agent"}`
-              }
-              rows={Math.min(8, Math.max(1, draft.split("\n").length))}
-              aria-label="Message"
-            />
-            {busy ? (
-              <button type="button" className="btn stop" onClick={stop}>
-                Stop
-              </button>
-            ) : (
-              <button type="submit" className="btn primary" disabled={!draft.trim() || uploading}>
-                Send
-              </button>
-            )}
-          </form>
-          <p className="composer-hint muted small">
-            Enter to send, Shift+Enter for a new line. Drag a CSV into the chat to attach it.
-          </p>
-        </div>
-      </footer>
+            <Icon name="panel" size={20} />
+          </button>
+          <div className="workspace-label">
+            <div className="workspace-title" title={session?.title}>{session?.title || "New conversation"}</div>
+            {talkingTo && <div className="workspace-agent">{talkingTo}</div>}
+          </div>
+          <button
+            type="button"
+            className="model-button"
+            aria-label={settings ? `Settings for ${settings.model}` : "Settings"}
+            aria-haspopup="dialog"
+            onClick={() => setSettingsOpen(true)}
+            disabled={!settings || sessionLocked}
+          >
+            {settings && <span>{settings.model}</span>}
+            <Icon name="sliders" />
+          </button>
+        </header>
 
-      {sidebarOpen && (
-        <>
-          <div className="float-backdrop" onClick={closePanels} aria-hidden />
-          <aside className="float-panel chats-panel" aria-label="Chats">
-            <div className="brand">
-              <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden>
-                <rect width="32" height="32" rx="7" fill="var(--agent)" />
-                <path d="M10 6v20" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" />
-                <circle cx="10" cy="11" r="3.2" fill="#fff" />
-                <circle cx="10" cy="21" r="3.2" fill="#F2B544" />
-                <path d="M15 11h8M15 21h6" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" />
-              </svg>
-              <div>
-                <div className="brand-name">BaseAgent</div>
-                <div className="brand-sub">Russell's chat room</div>
+        <div className={`workspace-body ${showConversation ? "with-conversation" : "is-empty"}`}>
+          {board && (
+            <div className="board-wrap column">
+              <ChessPanel
+                key={session?.id}
+                board={board}
+                busy={sessionLocked}
+                onMove={chessMove}
+                onClaimDraw={claimDraw}
+                onRewind={rewindBoard}
+                onAsk={send}
+                notice={chessNotice}
+              />
+            </div>
+          )}
+          {showConversation ? (
+            <div className="conversation" ref={scroller} onScroll={onScroll} aria-label="Conversation" tabIndex={0}>
+              <div className="column">
+                {busy && turns.length === 0 && <p className="muted" role="status">Waiting for the agent…</p>}
+                {turns.map((turn, i) => (
+                  <TurnView
+                    key={turn.index}
+                    turn={turn}
+                    live={busy && i === turns.length - 1}
+                    agentTitle={agents.find((a) => a.name === turn.agent)?.title}
+                  />
+                ))}
               </div>
             </div>
-            <label className="field agent-field">
-              <span className="label">Agent</span>
-              <select value={agent?.name ?? ""} onChange={(e) => newChat(e.target.value)} disabled={busy}>
-                {agents.map((a) => (
-                  <option key={a.name} value={a.name}>
-                    {a.title}
-                  </option>
-                ))}
-              </select>
-              {agent?.description && <span className="hint">{agent.description}</span>}
-            </label>
-            <button className="btn primary block" onClick={() => newChat()} disabled={busy}>
-              New chat
-            </button>
-            <nav className="session-list" aria-label="Chats">
-              {sessions.length === 0 && <p className="muted small">Your chats appear here.</p>}
-              {sessions.map((s) => (
-                <div key={s.id} className={`session-item ${session?.id === s.id ? "current" : ""}`}>
-                  <button className="session-open" onClick={() => openSession(s.id)}>
-                    <span className="session-title">{s.title}</span>
-                    <span className="session-meta">
-                      {agents.find((a) => a.name === s.agent)?.title ?? s.agent}, {timeAgo(s.updated)}
+          ) : (
+            <div className="welcome column">
+              <span className="brand-mark welcome-mark"><Icon name="brand" size={25} /></span>
+              <h1>What are we working on?</h1>
+            </div>
+          )}
+
+          <footer className="composer-wrap column">
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <form
+              className="composer"
+              onSubmit={(e) => {
+                e.preventDefault();
+                send(draft);
+              }}
+            >
+              {(attachments.length > 0 || uploading) && (
+                <div className="pending-files">
+                  {attachments.map((file) => (
+                    <span key={file.path} className="pending-file">
+                      <FileIcon />
+                      <span className="pending-name" title={file.name}>{file.name}</span>
+                      <span className="muted">{formatSize(file.size)}</span>
+                      <button
+                        type="button"
+                        className="icon-btn chip-x"
+                        onClick={() => setAttachments((prev) => prev.filter((a) => a.path !== file.path))}
+                        aria-label={`Remove ${file.name}`}
+                      >
+                        <Icon name="close" size={14} />
+                      </button>
                     </span>
-                  </button>
-                  <button className="icon-btn subtle" onClick={() => deleteSession(s.id)} aria-label={`Delete chat ${s.title}`}>
-                    ✕
-                  </button>
+                  ))}
+                  {uploading && <span className="muted" role="status">Uploading…</span>}
                 </div>
-              ))}
-            </nav>
-            <p className="panel-note muted small">Chats live in server memory and are logged to runs/.</p>
-          </aside>
-        </>
-      )}
+              )}
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onPaste={(e) => {
+                  // Fence pasted code so the code agent sees its original formatting.
+                  const fenced = fenceIfCode(e.clipboardData.getData("text/plain"));
+                  if (!fenced) return;
+                  e.preventDefault();
+                  const el = e.currentTarget;
+                  const before = draft.slice(0, el.selectionStart);
+                  const after = draft.slice(el.selectionEnd);
+                  const head = before + (before && !before.endsWith("\n") ? "\n" : "") + fenced + "\n";
+                  setDraft(head + after.replace(/^\n/, ""));
+                  requestAnimationFrame(() => el.setSelectionRange(head.length, head.length));
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    send(draft);
+                  }
+                }}
+                placeholder={attachments.length ? "Ask about your attachments" : `Message ${talkingTo ?? "the agent"}`}
+                rows={Math.min(8, draft.split("\n").length)}
+                aria-label="Message"
+              />
+              <div className="composer-actions">
+                <button
+                  type="button"
+                  className="icon-btn attach"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={sessionLocked || !agent}
+                  aria-label="Attach files"
+                  title="Attach files"
+                >
+                  <Icon name="attach" size={20} />
+                </button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  multiple
+                  accept={UPLOAD_ACCEPT}
+                  hidden
+                  onChange={(e) => {
+                    uploadFiles(Array.from(e.target.files ?? []));
+                    e.target.value = "";
+                  }}
+                />
+                {busy ? (
+                  <button type="button" className="send-button stop-button" onClick={stop} disabled={!session} aria-label="Stop response" title="Stop response">
+                    <Icon name="stop" />
+                  </button>
+                ) : (
+                  <button type="submit" className="send-button" disabled={!draft.trim() || sessionLocked || !agent} aria-label="Send message" title="Send message">
+                    <Icon name="send" />
+                  </button>
+                )}
+              </div>
+            </form>
+          </footer>
+
+          {!showConversation && agent && agent.examples.length > 0 && (
+            <section className="suggestions column" aria-labelledby="suggestions-heading">
+              <h2 id="suggestions-heading">Try a prompt</h2>
+              <div className="examples">
+                {agent.examples.map((example) => (
+                  <button type="button" key={example} className="example" onClick={() => send(example)} disabled={sessionLocked}>
+                    <Icon name="chat" size={16} />
+                    <span>{example}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      </main>
 
       <SettingsPanel
         open={settingsOpen}

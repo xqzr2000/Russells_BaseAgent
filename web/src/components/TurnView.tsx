@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Attachment } from "../types";
 import { turnFiles, type Step, type ToolRun, type Turn } from "../turns";
+import { Icon } from "./Icon";
 import { FileIcon } from "./FileIcon";
 import { Markdown } from "./Markdown";
 
@@ -157,7 +158,7 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
   const files = turnFiles(turn);
 
   return (
-    <article className={`turn ${turn.via ? "is-handoff" : ""}`}>
+    <article className="turn">
       {turn.via ? (
         <div className="handoff-divider" role="note">
           <span>{agentTitle ?? turn.agent} joined</span>
@@ -186,6 +187,10 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
         </div>
       )}
       <div className="agent-msg">
+        <div className="response-label">
+          <span className="brand-mark"><Icon name="brand" size={14} /></span>
+          <span>{agentTitle ?? turn.agent}</span>
+        </div>
         {(traced.length > 0 || showThinkingNode) && (
           <ol className="trace">
             {traced.map((step) => (
