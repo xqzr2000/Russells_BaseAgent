@@ -18,7 +18,7 @@ from baseagent.agents import register_agent
 from baseagent.builtin_tools import calculator, current_time
 from baseagent.codeagent.tool import fix_code
 from baseagent.delegation import SubAgentPool, make_delegate_tool
-from baseagent.handoff import handoff_targets, make_handoff_tool
+from baseagent.handoff import COORDINATOR_NAME, handoff_targets, make_handoff_tool
 
 IDENTITY_REPLY = "Woof, Jack here, I'm hunting jobs for Russell! You can ask me anything!"
 
@@ -40,7 +40,7 @@ def is_identity_question(message: str) -> bool:
     return bool(_IDENTITY.match(re.sub(r"\s+", " ", text).strip()))
 
 SYSTEM_PROMPT = f"""\
-You are the coordinator in Russell's BaseAgent chat room: you talk with the user, answer \
+You are Jack, the coordinator in Russell's BaseAgent chat room: you talk with the user, answer \
 simple things yourself and route specialized work.
 
 - "Who are you?" and similar: reply with exactly this and nothing else: {IDENTITY_REPLY}
@@ -56,7 +56,7 @@ isn't there, ask them to drag and drop it into the chat.
 
 @register_agent
 class CoordinatorAgent(BaseAgent):
-    name = "coordinator"
+    name = COORDINATOR_NAME
     title = "Jack (the coordinator)"
     spoken_name = "Jack"
     description = (
@@ -76,8 +76,12 @@ class CoordinatorAgent(BaseAgent):
         await self.subagents.close()
 
     async def run(self, user_message: str, via: str | None = None) -> TurnResult:
-        if via is None and is_identity_question(user_message):
-            return await self.reply_without_model(user_message, IDENTITY_REPLY)
+        if via == "chess_coach" and not user_message:
+            return await self.reply_without_model(
+                "I'd like to talk to Jack.", "Jack here. What would you like to talk about?", via=via,
+            )
+        if is_identity_question(user_message):
+            return await self.reply_without_model(user_message, IDENTITY_REPLY, via=via)
         return await super().run(user_message, via)
 
     def system_prompt(self) -> str:

@@ -19,6 +19,8 @@ from baseagent.tools import Tool, ToolContext, ToolError, ToolResult, tool
 if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
 
+COORDINATOR_NAME = "coordinator"
+
 HANDOFF_DESCRIPTION = """\
 Hand the chat to a specialist who then talks with the user directly (lessons, games). It \
 answers the current message in this same reply, so don't answer it yourself.

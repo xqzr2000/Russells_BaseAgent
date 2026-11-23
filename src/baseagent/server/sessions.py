@@ -23,7 +23,7 @@ from baseagent import events as ev
 from baseagent.agent import AgentSettings, BaseAgent
 from baseagent.agents import get_agent_class
 from baseagent.delegation import INHERITED_SETTINGS
-from baseagent.handoff import handoff_targets
+from baseagent.handoff import COORDINATOR_NAME, handoff_targets
 from baseagent.llm import LLMClient
 from baseagent.workspace import Workspace
 
@@ -97,16 +97,18 @@ class Session:
                 await agent.run(message, via=via)
             finally:
                 self.turns = agent.turn
-            request = agent.state.pop("handoff", None)
+                request = agent.state.pop("handoff", None)
             if not request or hop == MAX_HANDOFFS_PER_MESSAGE:
                 break
             target = request.get("to")
-            next_agent = self.agent if target is None else self.specialist(target)
+            next_agent = self.agent if target in (None, self.agent.name) else self.specialist(target)
             self.active = None if next_agent is self.agent else target
             await record(ev.Handoff(turn=self.turns, from_agent=agent.name, to_agent=next_agent.name,
                                     title=next_agent.title, ui_state=next_agent.ui_state()))
             note = request.get("note")
-            message = content + (f"\n\n(Note from the {agent.title}: {note})" if note else "")
+            message = request.get("message", content)
+            if note:
+                message += f"\n\n(Note from the {agent.title}: {note})"
             via, agent = agent.name, next_agent
 
     def specialist(self, name: str) -> BaseAgent:
@@ -117,7 +119,8 @@ class Session:
             if self.make_agent is None:
                 raise KeyError(f"This chat cannot create the {name!r} agent.")
             agent = self.make_agent(name)
-            agent.handoff_parent = (self.agent.name, type(self.agent).referred_as())
+            if name != COORDINATOR_NAME:
+                agent.handoff_parent = (self.agent.name, type(self.agent).referred_as())
             self.specialists[name] = agent
         inherited = {key: getattr(self.agent.settings, key) for key in INHERITED_SETTINGS}
         agent.settings = agent.settings.model_copy(update=inherited)
@@ -144,10 +147,13 @@ class SessionManager:
                     workspace=workspace)
 
         def make_agent(name: str) -> BaseAgent:
-            targets = handoff_targets()
-            if name not in targets:
-                raise KeyError(f"{name!r} is not an agent the chat can be handed to.")
-            specialist_cls = targets[name]
+            if name == COORDINATOR_NAME:
+                specialist_cls = get_agent_class(name)
+            else:
+                targets = handoff_targets()
+                if name not in targets:
+                    raise KeyError(f"{name!r} is not an agent the chat can be handed to.")
+                specialist_cls = targets[name]
             return specialist_cls(self.llm, specialist_cls.make_settings(), log_dir=self.log_dir,
                                   session_id=f"{session_id}.{name}", workspace=workspace)
 
