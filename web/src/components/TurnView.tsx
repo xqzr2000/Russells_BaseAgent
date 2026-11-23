@@ -3,6 +3,7 @@ import type { Attachment } from "../types";
 import { turnFiles, type Step, type ToolRun, type Turn } from "../turns";
 import { Icon } from "./Icon";
 import { FileIcon } from "./FileIcon";
+import { JACK_AGENT, JackResponseLabel } from "./JackAvatar";
 import { Markdown } from "./Markdown";
 
 /** Download cards for the files a turn produced (e.g. the EDA notebook). */
@@ -153,7 +154,9 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
       ? turn.finalText ?? ""
       : ""
     : answerStep?.text ?? "";
-  const showThinkingNode = live && !turn.ended && (!lastStep || (lastStep.done && lastStep.hasToolCalls));
+  const isJack = turn.agent === JACK_AGENT;
+  const jackWaiting = isJack && live && !turn.ended && !turn.steps.some((step) => step.text.trim());
+  const showThinkingNode = !jackWaiting && live && !turn.ended && (!lastStep || (lastStep.done && lastStep.hasToolCalls));
   const steps = turn.usage ? turn.steps.length : undefined;
   const files = turnFiles(turn);
 
@@ -187,10 +190,14 @@ export function TurnView({ turn, live, agentTitle }: { turn: Turn; live: boolean
         </div>
       )}
       <div className="agent-msg">
-        <div className="response-label">
-          <span className="brand-mark"><Icon name="brand" size={14} /></span>
-          <span>{agentTitle ?? turn.agent}</span>
-        </div>
+        {isJack ? (
+          <JackResponseLabel waiting={jackWaiting} title={agentTitle ?? "Jack"} />
+        ) : (
+          <div className="response-label">
+            <span className="brand-mark"><Icon name="brand" size={14} /></span>
+            <span>{agentTitle ?? turn.agent}</span>
+          </div>
+        )}
         {(traced.length > 0 || showThinkingNode) && (
           <ol className="trace">
             {traced.map((step) => (

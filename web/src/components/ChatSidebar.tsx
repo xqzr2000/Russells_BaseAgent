@@ -1,4 +1,5 @@
 import { Icon, type IconName } from "./Icon";
+import { JACK_AGENT, JackAvatar } from "./JackAvatar";
 import type { AgentInfo, SessionSummary } from "../types";
 
 interface Props {
@@ -14,7 +15,6 @@ interface Props {
 }
 
 const agentIcons: Partial<Record<string, IconName>> = {
-  coordinator: "agents",
   general: "chat",
   data_science: "data",
   chess_coach: "chess",
@@ -45,8 +45,17 @@ export function ChatSidebar({ agents, agent, sessions, sessionId, locked, offlin
                 onClick={() => onNew(item.name)}
                 disabled={locked}
               >
-                <Icon name={agentIcons[item.name] ?? "agents"} />
-                <span>{item.title}</span>
+                <span className="agent-icon">
+                  {item.name === JACK_AGENT ? <JackAvatar /> : <Icon name={agentIcons[item.name] ?? "agents"} />}
+                </span>
+                {item.name === JACK_AGENT ? (
+                  <span className="jack-sidebar-label">
+                    <span>Jack</span>
+                    <span className="jack-role">Coordinator</span>
+                  </span>
+                ) : (
+                  <span>{item.title}</span>
+                )}
               </button>
             ))}
           </nav>
