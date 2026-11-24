@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import NotRequired, TypedDict
@@ -29,6 +30,7 @@ END_MARKER = "BASEAGENT_NOTEBOOK_COMPLETE"
 LOGGER = logging.getLogger(__name__)
 
 PREFLIGHT = """\
+from dataclasses import dataclass, field
 from pathlib import Path
 from subprocess import check_output
 
@@ -43,6 +45,73 @@ print("BASEAGENT_GPU=" + gpu.splitlines()[0].strip())
 class NotebookCell(TypedDict):
     code: str
     note: NotRequired[str]
+
+
+@dataclass
+class ColabDraft:
+    title: str
+    path: Path
+    cells: list[NotebookCell] = field(default_factory=list)
+
+    def attachment(self, workspace: Workspace) -> Attachment:
+        return Attachment(kind="file", title=self.path.name, url=workspace.url(self.path), mime=NOTEBOOK_MIME)
+
+
+def colab_workspace(ctx: ToolContext) -> Workspace:
+    if ctx.agent.settings.notebook_runtime != "colab-t4":
+        raise ToolError("Colab is off for this chat. Select Colab T4 under Notebook compute in Settings.")
+    if ctx.agent.workspace is None:
+        raise ToolError("This chat has no data workspace.")
+    return ctx.agent.workspace
+
+
+@tool(exclusive=True)
+def start_colab_notebook(title: str, ctx: ToolContext = None) -> str:
+    """Start a new draft for a Colab notebook. It will be filled one cell at a time.
+
+    Args:
+        title: A short notebook title, such as Full-card CNN baseline.
+    """
+    workspace = colab_workspace(ctx)
+    folder = f"outputs/colab-draft-{uuid4().hex[:12]}"
+    ctx.state["colab_draft"] = ColabDraft(title.strip() or "Data science notebook",
+                                         workspace.resolve(f"{folder}/colab_draft.ipynb"))
+    ctx.state.pop("colab_outputs", None)
+    return "Started a Colab draft. Use save_colab_cell for cell 1."
+
+
+@tool(exclusive=True)
+def save_colab_cell(number: int, code: str, note: str = "", ctx: ToolContext = None) -> ToolResult:
+    """Save one Python cell in the current Colab draft without executing it.
+
+    Args:
+        number: One-based position among the authored cells. Use the next number to append,
+            or an existing number to replace a cell.
+        code: Python source for this cell only.
+        note: Optional Markdown heading and explanation for the cell.
+    """
+    workspace = colab_workspace(ctx)
+    draft = ctx.state.get("colab_draft")
+    if draft is None:
+        raise ToolError("Call start_colab_notebook before saving a cell.")
+    if not code.strip():
+        raise ToolError("Provide code for this cell.")
+    if not 1 <= number <= len(draft.cells) + 1:
+        raise ToolError(f"Choose a cell number from 1 to {len(draft.cells) + 1}.")
+
+    cells = list(draft.cells)
+    cells[number - 1:number] = [{"code": code, "note": note}]
+    notebook = make_notebook(cells, [], title=draft.title)
+    draft.path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = draft.path.with_suffix(".tmp")
+    nbformat.write(notebook, temporary)
+    temporary.replace(draft.path)
+    draft.cells = cells
+
+    attachments = [draft.attachment(workspace)]
+    ctx.state["colab_outputs"] = attachments
+    return ToolResult(f"Saved cell {number}. The draft contains {len(cells)} authored cells and has not run.",
+                      attachments=attachments)
 
 
 def input_files(workspace: Workspace, inputs: list[str]) -> dict[str, Path]:
@@ -114,15 +183,19 @@ async def release_runtime(binary: str, directory: Path, name: str) -> str | None
     return None
 
 
-def make_notebook(cells: list[NotebookCell], inputs: dict[str, Path], hardware: str) -> nbformat.NotebookNode:
+def make_notebook(cells: list[NotebookCell], inputs: list[str], hardware: str | None = None,
+                  title: str = "Data science notebook") -> nbformat.NotebookNode:
     recorder = NotebookRecorder()
-    recorder.add_markdown(f"# Data science notebook\n\nExecuted on Google Colab using {hardware}.")
+    status = f"Executed on Google Colab using {hardware}." if hardware else "Colab draft. The cells have not run."
+    recorder.add_markdown(f"# {title}\n\n{status}")
     recorder.add_code(SETUP_CODE, [], None)
-    for cell in cells:
+    for number, cell in enumerate(cells, start=1):
         recorder.add_markdown(cell.get("note", ""))
         recorder.add_code(cell["code"], [], None)
-    recorder.add_code(f"print({END_MARKER!r})", [], None)
-    return recorder.export(list(inputs))
+        recorder.cells[-1].metadata["baseagent_cell"] = number
+    if hardware:
+        recorder.add_code(f"print({END_MARKER!r})", [], None)
+    return recorder.export(inputs)
 
 
 def read_execution(path: Path, source: nbformat.NotebookNode) -> tuple[nbformat.NotebookNode, str]:
@@ -140,7 +213,9 @@ def read_execution(path: Path, source: nbformat.NotebookNode) -> tuple[nbformat.
         result = CellResult(index, cell.outputs)
         error = next((out for out in cell.outputs if out.output_type == "error"), None)
         if error is not None:
-            raise ToolError(f"Colab cell {index} failed: {error.ename}: {error.evalue[:400]}\n"
+            number = cell.metadata.get("baseagent_cell")
+            location = f" (authored cell {number})" if number is not None else ""
+            raise ToolError(f"Colab cell {index}{location} failed: {error.ename}: {error.evalue[:400]}\n"
                             f"{result.text()[-1400:]}")
         cell.execution_count = index
         if result.text():
@@ -151,22 +226,18 @@ def read_execution(path: Path, source: nbformat.NotebookNode) -> tuple[nbformat.
 
 
 @tool(exclusive=True, timeout=JOB_TIMEOUT + STOP_TIMEOUT + 10)
-async def run_colab_notebook(cells: list[NotebookCell], inputs: list[str], outputs: list[str],
-                             ctx: ToolContext = None) -> ToolResult:
-    """Execute a self-contained notebook on a verified Colab T4 and return its files.
+async def run_colab_notebook(inputs: list[str], outputs: list[str], ctx: ToolContext = None) -> ToolResult:
+    """Execute the saved draft on a verified Colab T4 and return its files.
 
     Args:
-        cells: Ordered notebook cells, each with Python code and an optional Markdown note.
         inputs: Uploaded chat paths the notebook reads, such as data/train.csv. Use [] for none.
         outputs: Filenames the notebook writes to its working directory, such as submission.csv.
     """
-    if ctx.agent.settings.notebook_runtime != "colab-t4":
-        raise ToolError("Colab is off for this chat. Select Colab T4 under Notebook compute in Settings.")
-    workspace = ctx.agent.workspace
-    if workspace is None:
-        raise ToolError("This chat has no data workspace.")
-    if not cells or any(not cell["code"].strip() for cell in cells):
-        raise ToolError("Provide at least one notebook cell with code.")
+    workspace = colab_workspace(ctx)
+    draft = ctx.state.get("colab_draft")
+    if draft is None or not draft.cells:
+        raise ToolError("Start a Colab notebook draft and save its cells before running it.")
+    ctx.state["colab_outputs"] = [draft.attachment(workspace)]
     if any(not FILENAME.fullmatch(name) or name == "analysis.ipynb" for name in outputs):
         raise ToolError("Use plain output filenames such as submission.csv. analysis.ipynb is reserved.")
 
@@ -199,7 +270,7 @@ async def run_colab_notebook(cells: list[NotebookCell], inputs: list[str], outpu
                     await ctx.progress(f"Uploading {path.name} to Colab")
                     await cli(binary, directory, name, "upload", str(path), f"/content/{relative}")
 
-                source = make_notebook(cells, files, hardware)
+                source = make_notebook(draft.cells, list(files), hardware, draft.title)
                 nbformat.write(source, directory / "analysis.ipynb")
                 await ctx.progress(f"Running the notebook on {hardware}")
                 await cli(binary, directory, name, "exec", "-f", "analysis.ipynb", "--timeout", "0")

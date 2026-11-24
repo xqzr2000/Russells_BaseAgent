@@ -125,6 +125,9 @@ to run an analysis or training notebook from the chat on a remote T4.
    baseline and write `submission.csv`. Its notebook and generated files appear
    as downloads in the chat.
 
+Jack builds the notebook one cell at a time before sending it to Colab. If execution
+fails, the chat can still return the saved `colab_draft.ipynb` with its source cells.
+
 Each run starts a fresh Colab session, checks the assigned GPU, and transfers the
 uploaded files declared by the notebook. The app uses Google credentials locally
 for the CLI. Successful downloads contain the executed notebook and requested

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from baseagent import AgentSettings, ScriptedLLM
-from baseagent.sandbox.colab import run_colab_notebook
+from baseagent.sandbox.colab import run_colab_notebook, save_colab_cell, start_colab_notebook
 from baseagent.server.app import create_app
 from baseagent.tools import ToolContext, ToolError
 from baseagent.workspace import Workspace
@@ -92,16 +92,36 @@ def tool_call(name: str, arguments: dict) -> dict:
     }
 
 
-ARGUMENTS = {
-    "cells": [{"note": "## Baseline", "code": 'df = pd.read_csv("data/train.csv")\nprint("Validation score: 0.75")'}],
-    "inputs": ["data/train.csv"],
-    "outputs": ["submission.csv"],
+def malformed_cell():
+    message = tool_call("save_colab_cell", {})
+    message["tool_calls"][0]["function"]["arguments"] = '{"number": 2, "code": "print('
+    return message
+
+
+TRAINING_CELL = {
+    "number": 1,
+    "note": "## Baseline",
+    "code": 'df = pd.read_csv("data/train.csv")\nprint("Validation score: 0.75")',
 }
+ARGUMENTS = {"inputs": ["data/train.csv"], "outputs": ["submission.csv"]}
+
+
+def stage_draft(ctx):
+    start_colab_notebook.handler("Test notebook", ctx=ctx)
+    outcome = save_colab_cell.handler(**TRAINING_CELL, ctx=ctx)
+    assert outcome.attachments[0].title == "colab_draft.ipynb"
+    return ctx.state["colab_draft"].path
 
 
 def test_colab_notebook_settings_and_downloads_through_jack(fake_colab, tmp_path):
     llm = ScriptedLLM([
         tool_call("delegate", {"agent": "data_science", "task": "Train on data/train.csv and return a notebook."}),
+        tool_call("start_colab_notebook", {"title": "GPU baseline"}),
+        tool_call("save_colab_cell", TRAINING_CELL),
+        malformed_cell(),
+        tool_call("save_colab_cell", {
+            "number": 2, "note": "## Export", "code": 'df.to_csv("submission.csv", index=False)',
+        }),
         tool_call("run_colab_notebook", ARGUMENTS),
         {"content": "Validation score: 0.75."},
         {"content": "The Colab notebook and submission are ready."},
@@ -124,13 +144,47 @@ def test_colab_notebook_settings_and_downloads_through_jack(fake_colab, tmp_path
         assert set(artifacts) == {"analysis.ipynb", "submission.csv"}
         notebook = nbformat.reads(client.get(artifacts["analysis.ipynb"]).text, as_version=4)
         assert "Tesla T4" in notebook.cells[0].source
-        assert notebook.cells[-1].outputs[0].text == "Validation score: 0.75\n"
+        training = next(cell for cell in notebook.cells if cell.metadata.get("baseagent_cell") == 1)
+        assert training.outputs[0].text == "Validation score: 0.75\n"
+        assert notebook.cells[-1].source == 'df.to_csv("submission.csv", index=False)'
         assert client.get(artifacts["submission.csv"]).text == "id,target\n1,0\n"
         assert any(event["type"] == "tool_progress" and "Tesla T4" in event["message"] for event in events)
 
     actions = calls(fake_colab)
     assert [action[0] for action in actions] == ["new", "exec", "upload", "exec", "download", "stop"]
     assert len({action[1] for action in actions}) == 1
+
+
+def test_failed_cell_arguments_leave_a_real_draft_through_jack(fake_colab, tmp_path):
+    llm = ScriptedLLM([
+        tool_call("delegate", {"agent": "data_science", "task": "Train a CNN and save label_map.json."}),
+        tool_call("start_colab_notebook", {"title": "Full-card baseline"}),
+        tool_call("save_colab_cell", TRAINING_CELL),
+        malformed_cell(),
+        {"content": "The draft has one saved cell. Training has not run."},
+        {"content": "Colab draft saved."},
+    ])
+    run_dir = tmp_path / "runs"
+    workspaces = tmp_path / "workspaces"
+    app = create_app(llm=llm, log_dir=run_dir, workspace_dir=workspaces)
+    with TestClient(app) as client:
+        session = client.post("/api/sessions", json={
+            "agent": "coordinator",
+            "settings": {"notebook_runtime": "colab-t4"},
+        }).json()
+        sid = session["id"]
+        response = client.post(f"/api/sessions/{sid}/messages", json={"content": "Train a CNN."})
+        assert response.status_code == 200
+        result = next(e for e in collect_sse(response.text) if e["type"] == "tool_end" and e["name"] == "delegate")
+        assert [file["title"] for file in result["attachments"]] == ["colab_draft.ipynb"]
+        notebook = nbformat.reads(client.get(result["attachments"][0]["url"]).text, as_version=4)
+        assert notebook.cells[-1].source == TRAINING_CELL["code"]
+        assert notebook.cells[-1].execution_count is None
+        assert not (workspaces / sid / "label_map_eda.ipynb").exists()
+
+    log = json.loads((run_dir / f"{sid}.data_science.json").read_text())
+    assert any("Arguments are not valid JSON" in e.get("content", "") for e in log["events"])
+    assert not calls(fake_colab)
 
 
 def tool_context(tmp_path, runtime="colab-t4"):
@@ -157,6 +211,7 @@ async def test_local_notebook_compute_cannot_start_colab(fake_colab, tmp_path):
 @pytest.mark.asyncio
 async def test_colab_rejects_paths_outside_uploaded_data(fake_colab, tmp_path):
     ctx = tool_context(tmp_path)
+    stage_draft(ctx)
     arguments = {**ARGUMENTS, "inputs": ["data/../train.csv"]}
     with pytest.raises(ToolError, match="uploaded files"):
         await run_colab_notebook.handler(**arguments, ctx=ctx)
@@ -167,26 +222,33 @@ async def test_colab_rejects_paths_outside_uploaded_data(fake_colab, tmp_path):
 async def test_colab_checks_the_actual_gpu_before_uploading_data(fake_colab, tmp_path):
     (fake_colab / "mode").write_text("wrong_gpu")
     ctx = tool_context(tmp_path)
+    stage_draft(ctx)
     with pytest.raises(ToolError, match="did not report a T4"):
         await run_colab_notebook.handler(**ARGUMENTS, ctx=ctx)
     assert [action[0] for action in calls(fake_colab)] == ["new", "exec", "stop"]
 
 
 @pytest.mark.asyncio
-async def test_colab_notebook_error_releases_runtime_and_withholds_artifacts(fake_colab, tmp_path):
+async def test_colab_notebook_error_releases_runtime_and_keeps_draft(fake_colab, tmp_path):
     (fake_colab / "mode").write_text("error")
     ctx = tool_context(tmp_path)
-    with pytest.raises(ToolError, match="Colab cell 3 failed: ValueError"):
+    draft = stage_draft(ctx)
+    with pytest.raises(ToolError, match=r"Colab cell 3 \(authored cell 1\) failed: ValueError"):
         await run_colab_notebook.handler(**ARGUMENTS, ctx=ctx)
     assert calls(fake_colab)[-1][0] == "stop"
-    assert "colab_outputs" not in ctx.state
-    assert not (ctx.agent.workspace.root / "outputs").exists()
+    assert [item.title for item in ctx.state["colab_outputs"]] == ["colab_draft.ipynb"]
+    notebook = nbformat.read(draft, as_version=4)
+    assert "have not run" in notebook.cells[0].source
+    assert notebook.cells[-1].source == TRAINING_CELL["code"]
+    assert notebook.cells[-1].execution_count is None
+    assert not list(draft.parent.parent.glob("baseagent-*"))
 
 
 @pytest.mark.asyncio
 async def test_stopping_colab_notebook_releases_runtime(fake_colab, tmp_path):
     (fake_colab / "mode").write_text("hold")
     ctx = tool_context(tmp_path)
+    draft = stage_draft(ctx)
     task = asyncio.create_task(run_colab_notebook.handler(**ARGUMENTS, ctx=ctx))
     try:
         async with asyncio.timeout(10):
@@ -197,4 +259,21 @@ async def test_stopping_colab_notebook_releases_runtime(fake_colab, tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert calls(fake_colab)[-1][0] == "stop"
-    assert not (ctx.agent.workspace.root / "outputs").exists()
+    assert draft.is_file()
+    assert not list(draft.parent.parent.glob("baseagent-*"))
+
+
+
+def test_draft_cells_can_be_replaced_without_running_colab(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    draft = stage_draft(ctx)
+    save_colab_cell.handler(2, "print('evaluation')", ctx=ctx)
+    with pytest.raises(ToolError, match="number from 1 to 3"):
+        save_colab_cell.handler(4, "print('gap')", ctx=ctx)
+    save_colab_cell.handler(1, "print('revised training')", ctx=ctx)
+
+    notebook = nbformat.read(draft, as_version=4)
+    authored = [cell for cell in notebook.cells if cell.metadata.get("baseagent_cell")]
+    assert [cell.source for cell in authored] == ["print('revised training')", "print('evaluation')"]
+    assert not calls(fake_colab)
+    assert "cells" not in run_colab_notebook.schema()["function"]["parameters"]["properties"]
