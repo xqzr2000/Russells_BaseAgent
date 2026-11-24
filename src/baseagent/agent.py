@@ -29,7 +29,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, ClassVar
+from typing import Any, Awaitable, Callable, ClassVar, Literal
 
 from pydantic import BaseModel
 
@@ -59,6 +59,7 @@ class AgentSettings(ModelSettings):
     compaction_keep_recent_steps: int = 2
     compaction_max_tokens: int = 1500
     tool_timeout: float = 120.0
+    notebook_runtime: Literal["local", "colab-t4"] = "local"
 
 
 @dataclass

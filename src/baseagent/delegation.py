@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
 
 DELEGATE_TIMEOUT = 1800.0  # a whole sub-agent run, not one call
-INHERITED_SETTINGS = ("model", "reasoning_effort", "temperature")
+INHERITED_SETTINGS = ("model", "reasoning_effort", "temperature", "notebook_runtime")
 
 DELEGATE_DESCRIPTION = """\
 Give a specialist a task and wait for its summary. It can't see this chat, so make the task \
@@ -90,6 +90,8 @@ def progress_message(event: BaseModel) -> str | None:
         elif code:
             label = code[0].strip()
         return f"step {event.step} · {label[:80]}"
+    if kind == "tool_progress":
+        return event.message
     if kind == "compaction":
         return "compacting its context"
     if kind == "error":

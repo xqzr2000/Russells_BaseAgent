@@ -13,6 +13,7 @@ const EFFORTS: { value: string | null; label: string }[] = [
 interface Props {
   open: boolean;
   settings: AgentSettings | null;
+  showNotebookCompute: boolean;
   config: ServerConfig | null;
   models: string[];
   modelsError: string | null;
@@ -21,7 +22,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function SettingsPanel({ open, settings, config, models, modelsError, onRefreshModels, onSave, onClose }: Props) {
+export function SettingsPanel({ open, settings, showNotebookCompute, config, models, modelsError, onRefreshModels, onSave, onClose }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [draft, setDraft] = useState<AgentSettings | null>(settings);
   const [saving, setSaving] = useState(false);
@@ -112,6 +113,33 @@ export function SettingsPanel({ open, settings, config, models, modelsError, onR
               {modelsError ?? `${models.length} models available from your account. Type any model id to use one not listed.`}
             </p>
           </section>
+
+          {showNotebookCompute && (
+            <fieldset className="field">
+              <legend>Notebook compute</legend>
+              <div className="segmented">
+                <label>
+                  <input
+                    type="radio"
+                    name="notebook-runtime"
+                    checked={draft.notebook_runtime !== "colab-t4"}
+                    onChange={() => set("notebook_runtime", "local")}
+                  />
+                  <span>Local CPU</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="notebook-runtime"
+                    checked={draft.notebook_runtime === "colab-t4"}
+                    onChange={() => set("notebook_runtime", "colab-t4")}
+                  />
+                  <span>Colab T4</span>
+                </label>
+              </div>
+              <p className="hint">Colab runs use your configured Google account and transfer the notebook's input files to Colab.</p>
+            </fieldset>
+          )}
 
           <fieldset className="field">
             <legend>Reasoning effort</legend>
@@ -222,7 +250,7 @@ export function SettingsPanel({ open, settings, config, models, modelsError, onR
 
           {error && <p className="form-error" role="alert">{error}</p>}
           <footer className="panel-foot">
-            <p className="hint">Applies to this chat and becomes the default for new chats.</p>
+            <p className="hint">Model and agent settings become defaults for new chats. Notebook compute applies to this chat.</p>
             <button className="btn primary" onClick={save} disabled={saving}>
               {saving ? "Saving..." : "Save settings"}
             </button>

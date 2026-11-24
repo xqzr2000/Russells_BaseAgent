@@ -102,6 +102,36 @@ the top on another machine:
 In Colab: **File → Upload notebook** (or open it from GitHub once it's in a repo), then
 **Run all**.
 
+### Run a notebook on Colab T4
+
+Use the official [Google Colab CLI](https://github.com/googlecolab/google-colab-cli)
+to run an analysis or training notebook from the chat on a remote T4.
+
+1. In the Codespace terminal, run `make colab-setup` to install the CLI. Have
+   [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) available to sign in.
+2. Configure Google Application Default Credentials for the account you use with
+   Colab. Complete sign-in in your browser, then check access with `colab --auth adc usage`.
+
+   ```bash
+   gcloud auth application-default login --no-launch-browser \
+     --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
+   ```
+
+3. In a chat with Jack or the data scientist, open **Settings → Notebook compute**,
+   select **Colab T4**, and save. Use a real chat model to plan the notebook.
+4. For a competition pilot, upload the data files you are allowed to use with Colab
+   (for example, train, test, and sample submission CSVs). Give the agent the
+   challenge objective, metric and submission requirements. Ask it to validate a
+   baseline and write `submission.csv`. Its notebook and generated files appear
+   as downloads in the chat.
+
+Each run starts a fresh Colab session, checks the assigned GPU, and transfers the
+uploaded files declared by the notebook. The app uses Google credentials locally
+for the CLI. Successful downloads contain the executed notebook and requested
+outputs. The app attempts to release the runtime on completion, failure, or Stop.
+A run has a 15-minute limit. T4 access depends on Colab capacity and your account's
+quota. New chats start with **Local CPU**.
+
 ### Fix and explain code
 
 1. Paste code in a ``` block (or attach a `.py`, `.js`, `.ts`, ... file) and ask, e.g.

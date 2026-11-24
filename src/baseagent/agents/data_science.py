@@ -18,6 +18,7 @@ from pathlib import Path
 from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.events import Attachment
+from baseagent.sandbox.colab import run_colab_notebook
 from baseagent.sandbox.notebook import NotebookSession, run_cell
 from baseagent.workspace import Workspace
 
@@ -67,6 +68,20 @@ suspicious types, constant or ID columns) and notable statistics. Use exact numb
 from your outputs. The notebook is saved automatically; don't paste its contents."""
 
 
+COLAB_PROMPT = """\
+Notebook compute for this chat is Colab T4. Use run_colab_notebook to deliver the executed
+notebook. Each call starts with a fresh kernel and includes all setup and analysis cells.
+Declare every uploaded data/ input by its exact path. Declare any deliverables the cells
+write, such as submission.csv, and use relative paths. Use run_cell for quick local inspection.
+If the user asks for a competition baseline, explain the target and evaluation split,
+report the competition metric from validation, and validate the submission against the
+sample format when one is available. Use a GPU-capable library when the task benefits.
+After a successful Colab run, summarize its actual results and the files it returned.
+If provisioning or execution fails, report what happened and correct code errors before
+retrying. Verify that any competition rules the user provides allow remote execution.
+"""
+
+
 def notebook_filename(task: str) -> str:
     """titanic_eda.ipynb for a task that mentions data/titanic.csv; else analysis.ipynb."""
     match = DATA_FILE.search(task)
@@ -113,13 +128,16 @@ class DataScienceAgent(BaseAgent):
             await self.notebook.close()  # stops the kernel; the saved notebook stays
 
     def system_prompt(self) -> str:
+        if self.settings.notebook_runtime == "colab-t4":
+            return SYSTEM_PROMPT + "\n\n" + COLAB_PROMPT
         return SYSTEM_PROMPT
 
     def get_tools(self):
-        return [run_cell]
+        return [run_cell, run_colab_notebook]
 
     async def run(self, user_message: str) -> TurnResult:
         """The base loop, framed in the notebook by the request and the findings."""
+        self.state.pop("colab_outputs", None)
         await self.ensure_ready()
         notebook = self.notebook
         if notebook.path is None:
@@ -135,6 +153,8 @@ class DataScienceAgent(BaseAgent):
         return result
 
     def output_files(self) -> list[Attachment]:
+        if outputs := self.state.get("colab_outputs"):
+            return outputs
         if self.notebook is None or self.notebook.cells_run == 0:
             return []
         return [self.notebook.attachment()]

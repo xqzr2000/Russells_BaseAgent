@@ -102,6 +102,7 @@ export interface AgentSettings {
   compaction_keep_recent_steps: number;
   compaction_max_tokens: number;
   tool_timeout: number;
+  notebook_runtime?: "local" | "colab-t4";
 }
 
 export interface AgentInfo {
