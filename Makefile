@@ -1,8 +1,11 @@
-.PHONY: setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup colab-setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
 	cd web && npm ci
+
+colab-setup:      ## install the isolated Google Colab CLI for T4 notebook runs
+	uv tool install google-colab-cli==0.8.0
 
 dev:              ## agent server + chat room with hot reload; open port 5173
 	bash scripts/dev.sh

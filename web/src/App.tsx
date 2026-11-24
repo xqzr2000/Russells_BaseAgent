@@ -171,6 +171,7 @@ export default function App() {
     setEvents([]);
     setChessNotice(null);
     setAgentName(name);
+    setPendingSettings((previous) => ({ ...previous, notebook_runtime: "local" }));
     setAttachments([]);
     setError(null);
     if (sidebarOpen) closeSidebar();
@@ -346,8 +347,9 @@ export default function App() {
       const updated = await api.updateSettings(session.id, next);
       setSession({ ...session, settings: updated });
     }
-    setPendingSettings(next);
-    saveDefaults(next);
+    const defaults = { ...next, notebook_runtime: "local" as const };
+    setPendingSettings(session ? defaults : next);
+    saveDefaults(defaults);
   };
 
   const showConversation = turns.length > 0 || board !== null || busy;
@@ -558,6 +560,7 @@ export default function App() {
       <SettingsPanel
         open={settingsOpen}
         settings={settings}
+        showNotebookCompute={agent?.name === "coordinator" || agent?.name === "data_science"}
         config={config}
         models={models}
         modelsError={modelsError}
