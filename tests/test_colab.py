@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from baseagent import AgentSettings, ScriptedLLM
 from baseagent.sandbox.colab import run_colab_notebook, save_colab_cell, start_colab_notebook
+from baseagent.sandbox.kaggle import CARDS_DATASET, CARDS_MANIFEST, kaggle_dataset
 from baseagent.server.app import create_app
 from baseagent.tools import ToolContext, ToolError
 from baseagent.workspace import Workspace
@@ -277,3 +279,85 @@ def test_draft_cells_can_be_replaced_without_running_colab(fake_colab, tmp_path)
     assert [cell.source for cell in authored] == ["print('revised training')", "print('evaluation')"]
     assert not calls(fake_colab)
     assert "cells" not in run_colab_notebook.schema()["function"]["parameters"]["properties"]
+
+
+
+def test_kaggle_draft_uses_supported_bootstrap_and_rejects_broken_import(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    url = f"https://www.kaggle.com/datasets/{CARDS_DATASET}/data"
+    result = start_colab_notebook.handler("Full-card classifier", kaggle_source=url, ctx=ctx)
+    assert "cards_manifest" in result
+    with pytest.raises(ToolError, match="no KaggleHub class"):
+        save_colab_cell.handler(1, "from kagglehub import KaggleHub", ctx=ctx)
+    with pytest.raises(ToolError, match="invalid Python at line 1"):
+        save_colab_cell.handler(1, "def bad(", ctx=ctx)
+
+    save_colab_cell.handler(1, '%matplotlib inline\nprint(len(cards_manifest))', ctx=ctx)
+    draft = ctx.state["colab_draft"]
+    notebook = nbformat.read(draft.path, as_version=4)
+    sources = [c.source for c in notebook.cells if c.cell_type == "code"]
+    assert len(sources) == 4
+    assert f"kagglehub.dataset_download({CARDS_DATASET!r})" in sources[1]
+    assert "cards_manifest" in sources[2] and "cards.csv" in sources[2]
+    assert "print(len(cards_manifest))" in sources[-1]
+    assert not calls(fake_colab)
+
+
+def test_public_dataset_url_survives_delegation_into_the_draft(fake_colab, tmp_path):
+    url = f"https://www.kaggle.com/datasets/{CARDS_DATASET}/data"
+    llm = ScriptedLLM([
+        tool_call("delegate", {"agent": "data_science", "task": f"Classify full images from {url}."}),
+        tool_call("start_colab_notebook", {"title": "Cards"}),
+        tool_call("save_colab_cell", {"number": 1, "code": "print(len(cards_manifest))"}),
+        {"content": "Draft created."},
+        {"content": "The Colab draft is ready."},
+    ])
+    app = create_app(llm=llm, log_dir=tmp_path / "runs", workspace_dir=tmp_path / "workspaces")
+    with TestClient(app) as client:
+        session = client.post("/api/sessions", json={
+            "agent": "coordinator", "settings": {"notebook_runtime": "colab-t4"},
+        }).json()
+        reply = client.post(f"/api/sessions/{session['id']}/messages", json={"content": f"Use {url}."})
+        result = next(e for e in collect_sse(reply.text) if e["type"] == "tool_end" and e["name"] == "delegate")
+        notebook = nbformat.reads(client.get(result["attachments"][0]["url"]).text, as_version=4)
+        assert any("kagglehub.dataset_download" in c.source for c in notebook.cells)
+    assert not calls(fake_colab)
+
+
+@pytest.mark.parametrize("value", [
+    "https://example.com/datasets/x/y",
+    "https://www.kaggle.com/competitions/some-contest",
+    "owner/../dataset",
+])
+def test_kaggle_only_accepts_dataset_urls_or_handles(value):
+    with pytest.raises(ToolError, match="dataset URL"):
+        kaggle_dataset(value)
+
+
+def test_cards_manifest_uses_exact_labels_and_keeps_source_splits(tmp_path):
+    ranks = "ace two three four five six seven eight nine ten jack queen king".split()
+    suits = "clubs diamonds hearts spades".split()
+    labels = [f"{rank} of {suit}" for rank in ranks for suit in suits] + ["joker"]
+    with (tmp_path / "cards.csv").open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["filepaths", "labels", "data set"])
+        for split in ("train", "valid", "test"):
+            for label in labels:
+                relative = Path(split) / label / "001.jpg"
+                image = tmp_path / relative
+                image.parent.mkdir(parents=True)
+                image.touch()
+                writer.writerow([relative.as_posix(), label, split])
+        writer.writerow(["train/ace of clubs/output", "ace of clubs", "train"])
+
+    namespace = {"dataset_root": tmp_path}
+    exec(CARDS_MANIFEST, namespace)
+    manifest = namespace["cards_manifest"]
+    assert manifest.groupby("split").size().to_dict() == {"test": 53, "train": 53, "valid": 53}
+    seven = manifest.loc[manifest["label"] == "seven of hearts"].iloc[0]
+    assert seven["rank"] == "seven" and seven["suit"] == "hearts"
+    assert manifest.loc[manifest["label"] == "joker", ["rank", "suit"]].isna().all().all()
+
+    (tmp_path / "test" / "two of clubs" / "001.jpg").unlink()
+    with pytest.raises(FileNotFoundError, match="two of clubs"):
+        exec(CARDS_MANIFEST, {"dataset_root": tmp_path})

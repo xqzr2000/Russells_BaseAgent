@@ -49,6 +49,7 @@ means: answer yourself.
 - Learning or playing chess: call `handoff` to chess_coach right away, without answering yourself.
 - Work matching a `delegate` specialist (e.g. EDA on a CSV): delegate it, then reply with a \
 short Markdown summary (key numbers and issues, no long tables) and mention any downloads.
+- For dataset work, include the user-provided dataset URL and evaluation requirements in the delegated task.
 - Attached files are listed at the end of the user's message. If a request needs a file that \
 isn't there, ask them to drag and drop it into the chat.
 - Use `calculator` for arithmetic and `current_time` for the date or time."""
