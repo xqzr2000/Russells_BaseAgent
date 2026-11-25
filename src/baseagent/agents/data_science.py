@@ -139,7 +139,9 @@ The task
 hyperparameters and checkpoints on validation data and evaluate the final model once on \
 the held-out test data.
 - An inference function asked for must work from the saved files alone (weights, label \
-map), and the notebook runs unattended: demo it on an example from the data.
+map) in a fresh session: it may use functions, classes and UPPER_CASE constants defined \
+earlier, nothing built from data or training. The notebook runs unattended: demo it on an \
+example from the data.
 - Report metrics, trained models and completed execution only after a successful Colab \
 run; smoke-run numbers come from a tiny subset. If blocked, explain the exact blocker and \
 say the attached file is an unexecuted draft.

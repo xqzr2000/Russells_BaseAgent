@@ -42,6 +42,10 @@ web:              ## chat room only (port 5173)
 test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
 
+.PHONY: eval-card
+eval-card:        ## grade an executed card-CNN notebook: make eval-card NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb
+	uv run python evals/card_cnn.py $(NOTEBOOK)
+
 sandbox-images:   ## build the code agent's sandbox images (needs Docker)
 	docker build -t baseagent-runner:1 docker/runner
 	docker build -t baseagent-opencode:1 docker/opencode
