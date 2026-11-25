@@ -1,4 +1,4 @@
-.PHONY: setup colab-setup dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup colab-setup colab-login colab-check dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -6,6 +6,15 @@ setup:            ## install Python (uv) and UI (npm) dependencies
 
 colab-setup:      ## install the isolated Google Colab CLI for T4 notebook runs
 	uv tool install google-colab-cli==0.8.0
+
+COLAB_SCOPES = openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
+
+colab-login:      ## sign in to Google once for Colab T4 runs (kept across rebuilds)
+	gcloud auth application-default login --no-launch-browser --scopes=$(COLAB_SCOPES)
+	colab --auth adc usage
+
+colab-check:      ## confirm the Colab CLI can use your Google sign-in
+	colab --auth adc usage
 
 dev:              ## agent server + chat room with hot reload; open port 5173
 	bash scripts/dev.sh

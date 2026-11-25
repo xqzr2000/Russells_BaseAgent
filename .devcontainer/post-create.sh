@@ -20,6 +20,18 @@ else
   echo "Docker isn't ready yet; run 'make sandbox-images' before using the code agent."
 fi
 
+# Colab T4 runs: the Colab CLI here, the Google sign-in persisted in $CLOUDSDK_CONFIG.
+make colab-setup || echo "Installing the Colab CLI failed; run 'make colab-setup' later."
+if [ -n "${CLOUDSDK_CONFIG:-}" ] && [ ! -d "$CLOUDSDK_CONFIG" ]; then
+  sudo mkdir -p "$CLOUDSDK_CONFIG" && sudo chown "$(id -u):$(id -g)" "$CLOUDSDK_CONFIG"
+  chmod 700 "$CLOUDSDK_CONFIG"
+fi
+if [ -f "${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}/application_default_credentials.json" ]; then
+  echo "Google credentials for Colab found. Check them with: make colab-check"
+else
+  echo "For Colab T4 runs, sign in once with: make colab-login"
+fi
+
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   echo "OPENAI_API_KEY found in the environment."
 else
