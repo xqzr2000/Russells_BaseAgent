@@ -176,12 +176,14 @@ train on what they're sent. Try it without the chat: `uv run python -m baseagent
 - Optional: set `OPENAI_MODEL` to override the default model
 - Without an API key, the chat room still works using the offline `fake-echo` model
 
-### 3. Start the app
-```bash
-make dev
-```
-- When prompted, open the Chat room port (5173)
-- You can also open it later from the Ports tab
+### 3. Open the chat room
+- The Codespace starts the chat room by itself, every time it starts or resumes.
+  Open the Chat room port (5173) from the Ports tab.
+- `make dev-log` follows its log; `make stop` stops it; `make start` starts it again.
+- `make dev` runs it in your terminal instead (it stops the background copy first).
+  Set `BASEAGENT_AUTOSTART=0` as a Codespaces variable to turn auto-start off.
+- Chats live in the agent server's memory, so they don't survive a restart. A tab left
+  open from before tells you so and starts a new chat with your next message.
 
 ### See it in action.
 

@@ -138,3 +138,13 @@ def test_file_endpoints_reject_bad_input(tmp_path):
                               json={"content": "hi", "files": ["../../secret.csv"]})
         assert outside.status_code == 422
         assert client.put("/api/sessions/nope/files/a.csv", content=b"a").status_code == 404
+
+
+def test_health_boot_id_identifies_the_server_run(tmp_path):
+    """The UI compares boot ids to tell that a restarted server has lost its chats."""
+    first = client_with(None, tmp_path / "a")
+    again = first.get("/api/health").json()
+    assert first.get("/api/health").json() == again and again["ok"] is True
+    assert len(again["boot_id"]) == 32
+    other = client_with(None, tmp_path / "b").get("/api/health").json()
+    assert other["boot_id"] != again["boot_id"]

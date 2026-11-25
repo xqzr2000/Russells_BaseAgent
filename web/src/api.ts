@@ -28,6 +28,8 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  /** boot_id changes whenever the agent server restarts (its chats are then gone). */
+  health: () => json<{ ok: boolean; boot_id: string }>("/api/health"),
   config: () => json<ServerConfig>("/api/config"),
   agents: () => json<AgentInfo[]>("/api/agents"),
   models: (refresh = false) =>
