@@ -22,7 +22,7 @@ from baseagent.tools import Tool, ToolContext, ToolError, ToolResult, tool
 if TYPE_CHECKING:
     from baseagent.agent import BaseAgent
 
-DELEGATE_TIMEOUT = 1800.0  # a whole sub-agent run, not one call
+DELEGATE_TIMEOUT = 2700.0  # a whole sub-agent run, not one call (Colab work: probe, smoke runs, 15-min run)
 INHERITED_SETTINGS = ("model", "reasoning_effort", "temperature", "notebook_runtime")
 
 DELEGATE_DESCRIPTION = """\

@@ -125,13 +125,26 @@ to run an analysis or training notebook from the chat on a remote T4.
    baseline and write `submission.csv`. Its notebook and generated files appear
    as downloads in the chat.
 
-For a public Kaggle dataset, paste its dataset URL directly. The draft includes
-the KaggleHub download code and exposes the downloaded directory as
-`dataset_root`. The playing-card dataset also provides `cards_manifest` with
-validated image paths, ranks, suits, and the original splits from `cards.csv`.
+For a public Kaggle dataset, paste its dataset URL directly. How the data scientist
+gets from the request to a Colab run:
 
-Jack builds the notebook one cell at a time before sending it to Colab. If execution
-fails, the chat can still return the saved `colab_draft.ipynb` with its source cells.
+1. **Look at the data.** `inspect_dataset` downloads the dataset in the Codespace
+   (cached after the first time) and reports its layout, each table's columns, whether
+   path columns point to real files, image sizes and any model files shipped with it.
+   It works the same for any dataset, or for the chat's uploaded `data/` files.
+2. **Write the draft**, one cell at a time. Cells written by BaseAgent come first and
+   define `SMOKE`, `OUTPUT_DIR` (where every returned file is written; `/content` on
+   Colab) and, for Kaggle, `dataset_root`.
+3. **Smoke run.** `smoke_test_notebook` runs every cell from the top on the
+   Codespace's CPU with `SMOKE = True`, when the notebook uses a tiny subset and one
+   short epoch, and checks that each declared output was written. A failure names the
+   cell and shows the output of the cells before it, in seconds, not after a Colab run.
+4. **Colab run.** `run_colab_notebook` only runs a draft that passed a smoke run after
+   its last change, with the same inputs and outputs.
+
+If execution fails, the chat can still return the saved `colab_draft.ipynb` with its
+source cells. The smoke run uses the CPU builds of `torch` and `torchvision` that
+`uv sync` installs.
 
 Each run starts a fresh Colab session, checks the assigned GPU, and transfers the
 uploaded files declared by the notebook. The app uses Google credentials locally

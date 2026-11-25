@@ -18,12 +18,19 @@ from pathlib import Path
 from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.events import Attachment
-from baseagent.sandbox.colab import run_colab_notebook, save_colab_cell, start_colab_notebook
+from baseagent.sandbox.colab import (
+    run_colab_notebook,
+    save_colab_cell,
+    smoke_test_notebook,
+    start_colab_notebook,
+)
 from baseagent.sandbox.kaggle import kaggle_dataset_in
 from baseagent.sandbox.notebook import NotebookSession, run_cell
+from baseagent.sandbox.probe import inspect_dataset
 from baseagent.workspace import Workspace
 
 ROOT = Path(__file__).resolve().parents[3]
+COLAB_MIN_STEPS = 40
 DATA_FILE = re.compile(r"[\w\-.]+\.(?:csv|tsv|txt|json|xlsx?|parquet)\b", re.IGNORECASE)
 
 SYSTEM_PROMPT = """\
@@ -70,27 +77,53 @@ from your outputs. The notebook is saved automatically; don't paste its contents
 
 
 COLAB_PROMPT = """\
-You are a data scientist creating and verifying a runnable notebook on a Colab T4.
+You are a data scientist building a notebook that runs on a Colab T4. You can't run cells \
+one by one: you write the draft, check it with a smoke run on this machine's CPU, and only \
+then run it on Colab (one run, at most 15 minutes, including the data download).
 
-- Start new work with start_colab_notebook. Save one short, complete cell at a time using
-  save_colab_cell, one tool call per response. Edit a saved cell by giving its original
-  number. Split long cells if a tool call's JSON is incomplete. Continue a draft when
-  the user asks to resume the same notebook.
-- Include setup, data loading, analysis or training, evaluation, and any requested inference
-  or artifact export in the notebook. Keep each cell small enough to fit in a tool call.
-- Call run_colab_notebook with just inputs and outputs after saving all cells. Declare uploaded
-  inputs by exact data/ path and use plain filenames in the notebook's working directory for
-  artifacts. For a Kaggle dataset, give start_colab_notebook the URL with kaggle_source.
-  It inserts the supported download code and defines dataset_root before your cells.
-  Use the supplied manifest when there is one. For image classification, use exact class
-  labels and existing split assignments. Verify expected classes and nonempty splits
-  before training. Use [] for inputs when the notebook downloads its own data.
-  Surface any Kaggle access issue without requesting credentials in chat.
-- Honor the user's model, preprocessing, split, and evaluation requirements. Choose hyperparameters
-  and checkpoints on validation data and evaluate the final model on the held-out test data.
-- If the run reports a cell error, repair that authored cell before retrying. Report metrics,
-  trained models, and completed execution only after a successful Colab run. If blocked,
-  explain the exact blocker and identify the saved file as an unexecuted draft.
+Workflow
+1. Look before you write. For a Kaggle dataset (URL or owner/dataset) call \
+inspect_dataset with it; for uploaded files call inspect_dataset("data"). Base every \
+path, column name, label and count in your code on that report, never on guesses.
+2. start_colab_notebook (pass the Kaggle URL as kaggle_source). Cells written by BaseAgent \
+come first and define:
+   - SMOKE (bool): True only in the smoke run.
+   - OUTPUT_DIR (pathlib.Path): write every file to return here, e.g. OUTPUT_DIR / "model.pt".
+   - dataset_root (pathlib.Path), for a Kaggle dataset. It can be read-only on Colab.
+   Use these variables; don't redefine them or download the data again.
+3. save_colab_cell: one short, complete cell per tool call, one call per response. Give \
+each cell a Markdown note (a "## Heading" and a sentence). Edit a cell by saving its number \
+again. Split a cell if its tool call gets long.
+4. smoke_test_notebook(inputs, outputs). It runs every cell from the top with SMOKE = True. \
+When SMOKE is True the notebook must use a tiny subset (a few examples per class) and one \
+short epoch or a few batches, but otherwise run exactly the same code, including writing \
+every declared output. Fix the cell it reports and run it again until it passes.
+5. run_colab_notebook with the same inputs and outputs. It refuses a draft that hasn't \
+passed a smoke run since its last change.
+
+Writing the cells
+- Build your own table of examples (path, label, split, ...) from the report. Before \
+training, assert what the report and the task lead you to expect: the class count, \
+non-empty splits, the excluded rows. Print the counts you'll need to report.
+- Print what someone would need to debug a failure: shapes, counts, column names.
+- Devices: device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); never \
+assume a GPU. Colab already has torch, torchvision, numpy, pandas, scikit-learn and Pillow: \
+don't install them.
+- Put training on a time budget and print each stage's duration.
+- Don't add fallback downloads, credential files or API keys. If Kaggle denies access, \
+explain that and ask the user to resolve it on Kaggle.
+- Don't use model files that ship with a dataset unless the task asks for them.
+- Declare uploaded inputs by exact data/ path; use [] when the notebook downloads its data.
+
+The task
+- Honor the user's model, preprocessing, split and evaluation requirements. Choose \
+hyperparameters and checkpoints on validation data and evaluate the final model once on \
+the held-out test data.
+- An inference function asked for must work from the saved files alone (weights, label \
+map), and the notebook runs unattended: demo it on an example from the data.
+- Report metrics, trained models and completed execution only after a successful Colab \
+run; smoke-run numbers come from a tiny subset. If blocked, explain the exact blocker and \
+say the attached file is an unexecuted draft.
 """
 
 
@@ -146,13 +179,17 @@ class DataScienceAgent(BaseAgent):
         return SYSTEM_PROMPT
 
     def get_tools(self):
-        return [run_cell, start_colab_notebook, save_colab_cell, run_colab_notebook]
+        return [run_cell, inspect_dataset, start_colab_notebook, save_colab_cell, smoke_test_notebook,
+                run_colab_notebook]
 
     async def run(self, user_message: str) -> TurnResult:
         """The base loop, framed in the notebook by the request and the findings."""
         self.state.pop("colab_outputs", None)
         if self.settings.notebook_runtime == "colab-t4":
             self.state["requested_kaggle_dataset"] = kaggle_dataset_in(user_message)
+            # inspect, ~12 cells, smoke runs with repairs, then Colab: more steps than EDA.
+            if self.settings.max_steps < COLAB_MIN_STEPS:
+                self.settings = self.settings.model_copy(update={"max_steps": COLAB_MIN_STEPS})
             return await super().run(user_message)
         await self.ensure_ready()
         notebook = self.notebook

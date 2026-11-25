@@ -34,6 +34,10 @@ datascience = [
     "scipy>=1.18.1",
     "seaborn>=0.13.2",
     "statsmodels>=0.15.0",
+    # Colab notebooks: the dataset probe and the CPU smoke run before each Colab run.
+    "kagglehub==1.0.3",
+    "torch>=2.9",
+    "torchvision>=0.24",
 ]
 dev = [
     "pytest>=8.0",
@@ -46,6 +50,14 @@ default-groups = ["dev", "datascience"]  # `uv sync` installs both
 
 [tool.uv.sources]
 agent-sandbox-runtime = { workspace = true }
+# CPU-only builds (about 1 GB) instead of the CUDA ones: the GPU work runs on Colab.
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.uv.workspace]
 members = ["packages/agent-sandbox-runtime"]

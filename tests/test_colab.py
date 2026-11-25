@@ -15,8 +15,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from baseagent import AgentSettings, ScriptedLLM
-from baseagent.sandbox.colab import run_colab_notebook, save_colab_cell, start_colab_notebook
-from baseagent.sandbox.kaggle import CARDS_DATASET, CARDS_MANIFEST, kaggle_dataset
+from baseagent.sandbox import probe
+from baseagent.sandbox.colab import (
+    fingerprint,
+    run_colab_notebook,
+    save_colab_cell,
+    smoke_test_notebook,
+    start_colab_notebook,
+)
+from baseagent.sandbox.kaggle import kaggle_dataset
+from baseagent.sandbox.probe import describe_dataset, inspect_dataset
 from baseagent.server.app import create_app
 from baseagent.tools import ToolContext, ToolError
 from baseagent.workspace import Workspace
@@ -47,12 +55,13 @@ elif command == "exec":
     notebook = nbformat.read(args[1], as_version=4)
     cells = [cell for cell in notebook.cells if cell.cell_type == "code"]
     assert "data/train.csv" in cells[1].source
+    training = next(cell for cell in cells if cell.metadata.get("baseagent_cell") == 1)
     if mode == "error":
-        cells[2].outputs = [nbformat.v4.new_output(
+        training.outputs = [nbformat.v4.new_output(
             "error", ename="ValueError", evalue="test training failure", traceback=[],
         )]
     else:
-        cells[2].outputs = [nbformat.v4.new_output("stream", name="stdout", text="Validation score: 0.75\\n")]
+        training.outputs = [nbformat.v4.new_output("stream", name="stdout", text="Validation score: 0.75\\n")]
     cells[-1].outputs = [nbformat.v4.new_output(
         "stream", name="stdout", text="BASEAGENT_NOTEBOOK_COMPLETE\\n",
     )]
@@ -106,13 +115,19 @@ TRAINING_CELL = {
     "code": 'df = pd.read_csv("data/train.csv")\nprint("Validation score: 0.75")',
 }
 ARGUMENTS = {"inputs": ["data/train.csv"], "outputs": ["submission.csv"]}
+EXPORT_CELL = {"number": 2, "note": "## Export", "code": 'df.to_csv(OUTPUT_DIR / "submission.csv", index=False)'}
+CARDS_DATASET = "gpiosenka/cards-image-datasetclassification"
 
 
-def stage_draft(ctx):
+def stage_draft(ctx, smoke_passed=True, arguments=ARGUMENTS):
+    """A one-cell draft; marked as smoke-tested unless smoke_passed is False."""
     start_colab_notebook.handler("Test notebook", ctx=ctx)
     outcome = save_colab_cell.handler(**TRAINING_CELL, ctx=ctx)
     assert outcome.attachments[0].title == "colab_draft.ipynb"
-    return ctx.state["colab_draft"].path
+    draft = ctx.state["colab_draft"]
+    if smoke_passed:
+        draft.smoke_passed = fingerprint(draft, arguments["inputs"], arguments["outputs"])
+    return draft.path
 
 
 def test_colab_notebook_settings_and_downloads_through_jack(fake_colab, tmp_path):
@@ -121,9 +136,9 @@ def test_colab_notebook_settings_and_downloads_through_jack(fake_colab, tmp_path
         tool_call("start_colab_notebook", {"title": "GPU baseline"}),
         tool_call("save_colab_cell", TRAINING_CELL),
         malformed_cell(),
-        tool_call("save_colab_cell", {
-            "number": 2, "note": "## Export", "code": 'df.to_csv("submission.csv", index=False)',
-        }),
+        tool_call("save_colab_cell", EXPORT_CELL),
+        tool_call("run_colab_notebook", ARGUMENTS),  # refused: no smoke run yet
+        tool_call("smoke_test_notebook", ARGUMENTS),
         tool_call("run_colab_notebook", ARGUMENTS),
         {"content": "Validation score: 0.75."},
         {"content": "The Colab notebook and submission are ready."},
@@ -148,13 +163,16 @@ def test_colab_notebook_settings_and_downloads_through_jack(fake_colab, tmp_path
         assert "Tesla T4" in notebook.cells[0].source
         training = next(cell for cell in notebook.cells if cell.metadata.get("baseagent_cell") == 1)
         assert training.outputs[0].text == "Validation score: 0.75\n"
-        assert notebook.cells[-1].source == 'df.to_csv("submission.csv", index=False)'
+        assert notebook.cells[-1].source == EXPORT_CELL["code"]
         assert client.get(artifacts["submission.csv"]).text == "id,target\n1,0\n"
         assert any(event["type"] == "tool_progress" and "Tesla T4" in event["message"] for event in events)
 
     actions = calls(fake_colab)
     assert [action[0] for action in actions] == ["new", "exec", "upload", "exec", "download", "stop"]
     assert len({action[1] for action in actions}) == 1
+    log = json.loads(next((tmp_path / "runs").glob("*.data_science.json")).read_text())
+    assert any("Run smoke_test_notebook first" in e.get("content", "") for e in log["events"])
+    assert any("Smoke run passed" in e.get("content", "") for e in log["events"])
 
 
 def test_failed_cell_arguments_leave_a_real_draft_through_jack(fake_colab, tmp_path):
@@ -213,8 +231,8 @@ async def test_local_notebook_compute_cannot_start_colab(fake_colab, tmp_path):
 @pytest.mark.asyncio
 async def test_colab_rejects_paths_outside_uploaded_data(fake_colab, tmp_path):
     ctx = tool_context(tmp_path)
-    stage_draft(ctx)
     arguments = {**ARGUMENTS, "inputs": ["data/../train.csv"]}
+    stage_draft(ctx, arguments=arguments)
     with pytest.raises(ToolError, match="uploaded files"):
         await run_colab_notebook.handler(**arguments, ctx=ctx)
     assert not calls(fake_colab)
@@ -235,7 +253,7 @@ async def test_colab_notebook_error_releases_runtime_and_keeps_draft(fake_colab,
     (fake_colab / "mode").write_text("error")
     ctx = tool_context(tmp_path)
     draft = stage_draft(ctx)
-    with pytest.raises(ToolError, match=r"Colab cell 3 \(authored cell 1\) failed: ValueError"):
+    with pytest.raises(ToolError, match=r"Colab cell 4 \(authored cell 1\) failed: ValueError"):
         await run_colab_notebook.handler(**ARGUMENTS, ctx=ctx)
     assert calls(fake_colab)[-1][0] == "stop"
     assert [item.title for item in ctx.state["colab_outputs"]] == ["colab_draft.ipynb"]
@@ -286,20 +304,21 @@ def test_kaggle_draft_uses_supported_bootstrap_and_rejects_broken_import(fake_co
     ctx = tool_context(tmp_path)
     url = f"https://www.kaggle.com/datasets/{CARDS_DATASET}/data"
     result = start_colab_notebook.handler("Full-card classifier", kaggle_source=url, ctx=ctx)
-    assert "cards_manifest" in result
+    assert "dataset_root" in result and "inspect_dataset" in result and "cards_manifest" not in result
     with pytest.raises(ToolError, match="no KaggleHub class"):
         save_colab_cell.handler(1, "from kagglehub import KaggleHub", ctx=ctx)
     with pytest.raises(ToolError, match="invalid Python at line 1"):
         save_colab_cell.handler(1, "def bad(", ctx=ctx)
 
-    save_colab_cell.handler(1, '%matplotlib inline\nprint(len(cards_manifest))', ctx=ctx)
+    save_colab_cell.handler(1, '%matplotlib inline\nprint(dataset_root)', ctx=ctx)
     draft = ctx.state["colab_draft"]
     notebook = nbformat.read(draft.path, as_version=4)
     sources = [c.source for c in notebook.cells if c.cell_type == "code"]
-    assert len(sources) == 4
-    assert f"kagglehub.dataset_download({CARDS_DATASET!r})" in sources[1]
-    assert "cards_manifest" in sources[2] and "cards.csv" in sources[2]
-    assert "print(len(cards_manifest))" in sources[-1]
+    assert len(sources) == 4  # setup, notebook settings, download, the authored cell
+    assert "OUTPUT_DIR" in sources[1] and "SMOKE" in sources[1]
+    assert f"kagglehub.dataset_download({CARDS_DATASET!r})" in sources[2]
+    assert not any("cards.csv" in source for source in sources)
+    assert "print(dataset_root)" in sources[-1]
     assert not calls(fake_colab)
 
 
@@ -308,7 +327,7 @@ def test_public_dataset_url_survives_delegation_into_the_draft(fake_colab, tmp_p
     llm = ScriptedLLM([
         tool_call("delegate", {"agent": "data_science", "task": f"Classify full images from {url}."}),
         tool_call("start_colab_notebook", {"title": "Cards"}),
-        tool_call("save_colab_cell", {"number": 1, "code": "print(len(cards_manifest))"}),
+        tool_call("save_colab_cell", {"number": 1, "code": "print(dataset_root)"}),
         {"content": "Draft created."},
         {"content": "The Colab draft is ready."},
     ])
@@ -334,30 +353,132 @@ def test_kaggle_only_accepts_dataset_urls_or_handles(value):
         kaggle_dataset(value)
 
 
-def test_cards_manifest_uses_exact_labels_and_keeps_source_splits(tmp_path):
-    ranks = "ace two three four five six seven eight nine ten jack queen king".split()
-    suits = "clubs diamonds hearts spades".split()
-    labels = [f"{rank} of {suit}" for rank in ranks for suit in suits] + ["joker"]
-    with (tmp_path / "cards.csv").open("w", newline="") as stream:
+@pytest.mark.parametrize("code", [
+    "!kaggle datasets download x -p /content  # needs ~/.kaggle/kaggle.json",
+    "os.environ['KAGGLE_KEY'] = 'abc'",
+    "Path('/root/.kaggle/').mkdir()",
+])
+def test_cells_cannot_use_kaggle_credentials(fake_colab, tmp_path, code):
+    ctx = tool_context(tmp_path)
+    start_colab_notebook.handler("Cards", kaggle_source=CARDS_DATASET, ctx=ctx)
+    with pytest.raises(ToolError, match="Kaggle credentials"):
+        save_colab_cell.handler(1, code, ctx=ctx)
+
+
+def card_like_dataset(root: Path) -> Path:
+    """A small copy of the playing-card dataset's layout, including its known oddities."""
+    from PIL import Image
+
+    labels = ["ace of clubs", "two of hearts", "joker"]
+    rows = []
+    for split, count in (("train", 3), ("valid", 1), ("test", 1)):
+        for index, label in enumerate(labels):
+            for number in range(count):
+                relative = Path(split) / label / f"{number + 1:03}.jpg"
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (224, 224), (index * 80, 40, 40)).save(root / relative)
+                rows.append([index, relative.as_posix(), label, label.split()[0], split])
+    rows.append([0, "train/ace of clubs/output", "ace of clubs", "ace", "train"])  # not an image
+    with (root / "cards.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["filepaths", "labels", "data set"])
-        for split in ("train", "valid", "test"):
-            for label in labels:
-                relative = Path(split) / label / "001.jpg"
-                image = tmp_path / relative
-                image.parent.mkdir(parents=True)
-                image.touch()
-                writer.writerow([relative.as_posix(), label, split])
-        writer.writerow(["train/ace of clubs/output", "ace of clubs", "train"])
+        writer.writerow(["class index", "filepaths", "labels", "card type", "data set"])
+        writer.writerows(rows)
+    (root / "53cards-53-(200 X 200)-100.00.h5").write_bytes(b"\x89HDF")
+    return root
 
-    namespace = {"dataset_root": tmp_path}
-    exec(CARDS_MANIFEST, namespace)
-    manifest = namespace["cards_manifest"]
-    assert manifest.groupby("split").size().to_dict() == {"test": 53, "train": 53, "valid": 53}
-    seven = manifest.loc[manifest["label"] == "seven of hearts"].iloc[0]
-    assert seven["rank"] == "seven" and seven["suit"] == "hearts"
-    assert manifest.loc[manifest["label"] == "joker", ["rank", "suit"]].isna().all().all()
 
-    (tmp_path / "test" / "two of clubs" / "001.jpg").unlink()
-    with pytest.raises(FileNotFoundError, match="two of clubs"):
-        exec(CARDS_MANIFEST, {"dataset_root": tmp_path})
+def test_dataset_report_states_the_facts_a_notebook_needs(tmp_path):
+    report = describe_dataset(card_like_dataset(tmp_path / "cards"), CARDS_DATASET)
+    assert "cards.csv: 16 rows × 5 columns" in report
+    assert "'filepaths': str, 16 non-null, 16 unique; e.g. 'train/ace of clubs/001.jpg'" in report
+    assert "'data set': str, 16 non-null, 3 unique; values: 'train' (10), 'valid' (3), 'test' (3)" in report
+    assert "file paths: 15 of 16 point to existing files; not files: 'train/ace of clubs/output'" in report
+    assert "train/  9 files (.jpg 9) in 3 folders" in report and "joker/  1 file (.jpg 1)" in report
+    assert "(test/, train/, valid/ have the same 3 subfolders)" in report
+    assert "224×224 RGB" in report
+    assert "53cards-53-(200 X 200)-100.00.h5" in report and "train your own" in report
+
+
+@pytest.mark.asyncio
+async def test_inspect_dataset_downloads_once_per_chat(tmp_path, monkeypatch):
+    root = card_like_dataset(tmp_path / "cards")
+    downloads = []
+    monkeypatch.setattr(probe, "download_dataset", lambda handle: downloads.append(handle) or root)
+    ctx = tool_context(tmp_path)
+    first = await inspect_dataset.handler(f"https://www.kaggle.com/datasets/{CARDS_DATASET}/data", ctx=ctx)
+    await inspect_dataset.handler(CARDS_DATASET, ctx=ctx)
+    assert downloads == [CARDS_DATASET]
+    assert "dataset_root" in first and "cards.csv" in first
+    uploaded = await inspect_dataset.handler("data", ctx=ctx)
+    assert "train.csv: 2 rows × 2 columns" in uploaded
+
+
+SMOKE_ARGUMENTS = {"inputs": ["data/train.csv"], "outputs": ["model.txt"]}
+
+
+def smoke_draft(ctx, *cells: str, kaggle_source: str | None = None):
+    start_colab_notebook.handler("Smoke test", kaggle_source=kaggle_source, ctx=ctx)
+    for number, code in enumerate(cells, start=1):
+        save_colab_cell.handler(number, code, note=f"## Step {number}", ctx=ctx)
+    return ctx.state["colab_draft"]
+
+
+@pytest.mark.asyncio
+async def test_smoke_run_passes_and_unlocks_colab_until_the_draft_changes(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    draft = smoke_draft(
+        ctx,
+        'df = pd.read_csv("data/train.csv")\nrows = df.head(1) if SMOKE else df\nprint("rows:", len(rows))',
+        '!pip install -q some-package-colab-has\n(OUTPUT_DIR / "model.txt").write_text(f"smoke={SMOKE}")',
+    )
+    result = await smoke_test_notebook.handler(**SMOKE_ARGUMENTS, ctx=ctx)
+    assert "Smoke run passed" in result.content and "model.txt" in result.content
+    assert "rows: 1" in result.content
+    assert (ctx.agent.workspace.root / "outputs" / "smoke" / "model.txt").read_text() == "smoke=True"
+    assert draft.smoke_passed == fingerprint(draft, **SMOKE_ARGUMENTS)
+
+    with pytest.raises(ToolError, match="Run smoke_test_notebook first"):  # other outputs than tested
+        await run_colab_notebook.handler(inputs=["data/train.csv"], outputs=["other.txt"], ctx=ctx)
+    save_colab_cell.handler(1, 'df = pd.read_csv("data/train.csv")', ctx=ctx)
+    with pytest.raises(ToolError, match="Run smoke_test_notebook first"):  # changed since the smoke run
+        await run_colab_notebook.handler(**SMOKE_ARGUMENTS, ctx=ctx)
+    assert not calls(fake_colab)
+
+
+@pytest.mark.asyncio
+async def test_smoke_failure_names_the_cell_and_shows_what_came_before(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    draft = smoke_draft(
+        ctx,
+        'manifest = pd.read_csv("data/train.csv")\nprint("columns:", list(manifest.columns))',
+        'print(manifest["rank"])',
+    )
+    with pytest.raises(ToolError) as failure:
+        await smoke_test_notebook.handler(**SMOKE_ARGUMENTS, ctx=ctx)
+    message = str(failure.value)
+    assert "Smoke run failed at authored cell 2: KeyError" in message
+    assert "columns: ['x', 'y']" in message  # the earlier output that explains the failure
+    assert draft.smoke_passed is None
+
+
+@pytest.mark.asyncio
+async def test_smoke_run_requires_every_declared_output(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    smoke_draft(ctx, 'Path("model.txt").write_text("written to the wrong folder")')
+    with pytest.raises(ToolError, match="OUTPUT_DIR has no model.txt"):
+        await smoke_test_notebook.handler(**SMOKE_ARGUMENTS, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_smoke_run_reuses_the_inspected_kaggle_copy(fake_colab, tmp_path, monkeypatch):
+    root = card_like_dataset(tmp_path / "cards")
+    monkeypatch.setattr(probe, "download_dataset", lambda handle: root)
+    ctx = tool_context(tmp_path)
+    smoke_draft(
+        ctx,
+        'cards = pd.read_csv(dataset_root / "cards.csv")\nprint("root:", dataset_root, len(cards))\n'
+        '(OUTPUT_DIR / "model.txt").write_text("ok")',
+        kaggle_source=CARDS_DATASET,
+    )
+    result = await smoke_test_notebook.handler(inputs=[], outputs=["model.txt"], ctx=ctx)
+    assert f"root: {root} 16" in result.content
