@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
 import mimetypes
@@ -15,8 +16,16 @@ from typing import NotRequired, TypedDict
 from uuid import uuid4
 
 import nbformat
+from IPython.core.inputtransformer2 import TransformerManager
 
 from baseagent.events import Attachment
+from baseagent.sandbox.kaggle import (
+    CARDS_INSTRUCTIONS,
+    CARDS_MANIFEST,
+    is_cards_dataset,
+    kaggle_dataset,
+    kaggle_download_source,
+)
 from baseagent.sandbox.kernel import CellResult
 from baseagent.sandbox.notebook import NOTEBOOK_MIME, SETUP_CODE, NotebookRecorder
 from baseagent.tools import ToolContext, ToolError, ToolResult, tool
@@ -30,7 +39,6 @@ END_MARKER = "BASEAGENT_NOTEBOOK_COMPLETE"
 LOGGER = logging.getLogger(__name__)
 
 PREFLIGHT = """\
-from dataclasses import dataclass, field
 from pathlib import Path
 from subprocess import check_output
 
@@ -51,6 +59,7 @@ class NotebookCell(TypedDict):
 class ColabDraft:
     title: str
     path: Path
+    kaggle_handle: str | None = None
     cells: list[NotebookCell] = field(default_factory=list)
 
     def attachment(self, workspace: Workspace) -> Attachment:
@@ -66,18 +75,41 @@ def colab_workspace(ctx: ToolContext) -> Workspace:
 
 
 @tool(exclusive=True)
-def start_colab_notebook(title: str, ctx: ToolContext = None) -> str:
+def start_colab_notebook(title: str, kaggle_source: str | None = None, ctx: ToolContext = None) -> str:
     """Start a new draft for a Colab notebook. It will be filled one cell at a time.
 
     Args:
         title: A short notebook title, such as Full-card CNN baseline.
+        kaggle_source: The public Kaggle dataset URL or owner/dataset handle, if the user supplied one.
+            The notebook gets a download cell and a dataset_root variable automatically.
     """
     workspace = colab_workspace(ctx)
+    handle = kaggle_dataset(kaggle_source) if kaggle_source else ctx.state.get("requested_kaggle_dataset")
     folder = f"outputs/colab-draft-{uuid4().hex[:12]}"
     ctx.state["colab_draft"] = ColabDraft(title.strip() or "Data science notebook",
-                                         workspace.resolve(f"{folder}/colab_draft.ipynb"))
+                                         workspace.resolve(f"{folder}/colab_draft.ipynb"), handle)
     ctx.state.pop("colab_outputs", None)
-    return "Started a Colab draft. Use save_colab_cell for cell 1."
+    message = "Started a Colab draft. Use save_colab_cell for the first authored cell."
+    if handle:
+        message += f" The notebook automatically downloads {handle} into dataset_root."
+        if is_cards_dataset(handle):
+            message += " " + CARDS_INSTRUCTIONS
+    return message
+
+
+def validate_colab_cell(code: str, number: int) -> None:
+    try:
+        tree = ast.parse(TransformerManager().transform_cell(code))
+    except SyntaxError as exc:
+        raise ToolError(f"Cell {number} has invalid Python at line {exc.lineno}: {exc.msg}.") from exc
+    for node in ast.walk(tree):
+        invalid_import = (isinstance(node, ast.ImportFrom) and node.module == "kagglehub"
+                          and any(name.name == "KaggleHub" for name in node.names))
+        invalid_attribute = (isinstance(node, ast.Attribute) and node.attr == "KaggleHub"
+                             and isinstance(node.value, ast.Name) and node.value.id == "kagglehub")
+        if invalid_import or invalid_attribute:
+            raise ToolError("kagglehub has no KaggleHub class. Pass the dataset URL to start_colab_notebook "
+                            "and use dataset_root in your cells.")
 
 
 @tool(exclusive=True)
@@ -99,9 +131,10 @@ def save_colab_cell(number: int, code: str, note: str = "", ctx: ToolContext = N
     if not 1 <= number <= len(draft.cells) + 1:
         raise ToolError(f"Choose a cell number from 1 to {len(draft.cells) + 1}.")
 
+    validate_colab_cell(code, number)
     cells = list(draft.cells)
     cells[number - 1:number] = [{"code": code, "note": note}]
-    notebook = make_notebook(cells, [], title=draft.title)
+    notebook = make_notebook(cells, [], title=draft.title, kaggle_handle=draft.kaggle_handle)
     draft.path.parent.mkdir(parents=True, exist_ok=True)
     temporary = draft.path.with_suffix(".tmp")
     nbformat.write(notebook, temporary)
@@ -184,11 +217,17 @@ async def release_runtime(binary: str, directory: Path, name: str) -> str | None
 
 
 def make_notebook(cells: list[NotebookCell], inputs: list[str], hardware: str | None = None,
-                  title: str = "Data science notebook") -> nbformat.NotebookNode:
+                  title: str = "Data science notebook", kaggle_handle: str | None = None) -> nbformat.NotebookNode:
     recorder = NotebookRecorder()
     status = f"Executed on Google Colab using {hardware}." if hardware else "Colab draft. The cells have not run."
     recorder.add_markdown(f"# {title}\n\n{status}")
     recorder.add_code(SETUP_CODE, [], None)
+    if kaggle_handle:
+        recorder.add_markdown("## Download the Kaggle dataset")
+        recorder.add_code(kaggle_download_source(kaggle_handle), [], None)
+        if is_cards_dataset(kaggle_handle):
+            recorder.add_markdown("## Validate the card labels and original splits")
+            recorder.add_code(CARDS_MANIFEST, [], None)
     for number, cell in enumerate(cells, start=1):
         recorder.add_markdown(cell.get("note", ""))
         recorder.add_code(cell["code"], [], None)
@@ -270,7 +309,7 @@ async def run_colab_notebook(inputs: list[str], outputs: list[str], ctx: ToolCon
                     await ctx.progress(f"Uploading {path.name} to Colab")
                     await cli(binary, directory, name, "upload", str(path), f"/content/{relative}")
 
-                source = make_notebook(draft.cells, list(files), hardware, draft.title)
+                source = make_notebook(draft.cells, list(files), hardware, draft.title, draft.kaggle_handle)
                 nbformat.write(source, directory / "analysis.ipynb")
                 await ctx.progress(f"Running the notebook on {hardware}")
                 await cli(binary, directory, name, "exec", "-f", "analysis.ipynb", "--timeout", "0")

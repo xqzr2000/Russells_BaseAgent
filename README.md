@@ -125,6 +125,11 @@ to run an analysis or training notebook from the chat on a remote T4.
    baseline and write `submission.csv`. Its notebook and generated files appear
    as downloads in the chat.
 
+For a public Kaggle dataset, paste its dataset URL directly. The draft includes
+the KaggleHub download code and exposes the downloaded directory as
+`dataset_root`. The playing-card dataset also provides `cards_manifest` with
+validated image paths, ranks, suits, and the original splits from `cards.csv`.
+
 Jack builds the notebook one cell at a time before sending it to Colab. If execution
 fails, the chat can still return the saved `colab_draft.ipynb` with its source cells.
 

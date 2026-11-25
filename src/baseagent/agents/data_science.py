@@ -19,6 +19,7 @@ from baseagent.agent import BaseAgent, TurnResult
 from baseagent.agents import register_agent
 from baseagent.events import Attachment
 from baseagent.sandbox.colab import run_colab_notebook, save_colab_cell, start_colab_notebook
+from baseagent.sandbox.kaggle import kaggle_dataset_in
 from baseagent.sandbox.notebook import NotebookSession, run_cell
 from baseagent.workspace import Workspace
 
@@ -79,9 +80,12 @@ You are a data scientist creating and verifying a runnable notebook on a Colab T
   or artifact export in the notebook. Keep each cell small enough to fit in a tool call.
 - Call run_colab_notebook with just inputs and outputs after saving all cells. Declare uploaded
   inputs by exact data/ path and use plain filenames in the notebook's working directory for
-  artifacts. For a public Kaggle dataset, try KaggleHub in the notebook using its dataset
-  handle. Ask the user to resolve any required access on Kaggle without sharing credentials
-  in chat or embedding them in code. Use [] for inputs when files are downloaded in the notebook.
+  artifacts. For a Kaggle dataset, give start_colab_notebook the URL with kaggle_source.
+  It inserts the supported download code and defines dataset_root before your cells.
+  Use the supplied manifest when there is one. For image classification, use exact class
+  labels and existing split assignments. Verify expected classes and nonempty splits
+  before training. Use [] for inputs when the notebook downloads its own data.
+  Surface any Kaggle access issue without requesting credentials in chat.
 - Honor the user's model, preprocessing, split, and evaluation requirements. Choose hyperparameters
   and checkpoints on validation data and evaluate the final model on the held-out test data.
 - If the run reports a cell error, repair that authored cell before retrying. Report metrics,
@@ -148,6 +152,7 @@ class DataScienceAgent(BaseAgent):
         """The base loop, framed in the notebook by the request and the findings."""
         self.state.pop("colab_outputs", None)
         if self.settings.notebook_runtime == "colab-t4":
+            self.state["requested_kaggle_dataset"] = kaggle_dataset_in(user_message)
             return await super().run(user_message)
         await self.ensure_ready()
         notebook = self.notebook
