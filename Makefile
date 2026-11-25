@@ -1,8 +1,11 @@
-.PHONY: setup colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup eval-card colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
 	cd web && npm ci
+
+eval-card:        ## grade an executed card-CNN notebook: make eval-card NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb
+	uv run python evals/card_cnn.py $(NOTEBOOK)
 
 colab-setup:      ## install the isolated Google Colab CLI for T4 notebook runs
 	uv tool install google-colab-cli==0.8.0
