@@ -102,6 +102,23 @@ the top on another machine:
 In Colab: **File → Upload notebook** (or open it from GitHub once it's in a repo), then
 **Run all**.
 
+### Knowledge skills (private)
+
+The data scientist loads concept skills from `knowledge/`, a git submodule of the
+private [jack-knows-it-all](https://github.com/xqzr2000/jack-knows-it-all) repo
+(e.g. `data-splitting`, `composite-labels`, `image-classification-baseline`). Its
+prompt lists each skill under its area with the scenarios it explains; the agent
+loads a skill with `invoke_skill` before work it covers, and its answer names the
+skills it used.
+
+- New codespaces check out `knowledge/` by themselves; GitHub asks you to authorize
+  read access to the private repo when the codespace is created (an existing
+  codespace needs to be recreated once to get it).
+- `make knowledge` pulls newly merged skills; new chats use them. Commit the moved
+  `knowledge` pointer when convenient.
+- Without access (public users), `knowledge/` stays empty and BaseAgent works
+  without these skills.
+
 ### Run a notebook on Colab T4
 
 Use the official [Google Colab CLI](https://github.com/googlecolab/google-colab-cli)

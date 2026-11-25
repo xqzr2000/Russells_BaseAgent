@@ -30,10 +30,24 @@ from baseagent.sandbox.probe import inspect_dataset
 from baseagent.workspace import Workspace
 
 ROOT = Path(__file__).resolve().parents[3]
-COLAB_MIN_STEPS = 40
+KNOWLEDGE_SKILLS = ROOT / "knowledge" / "skills"  # private submodule; absent for public users
+COLAB_MIN_STEPS = 45
+
+BASICS = """\
+Data-science basics (every task)
+- Splits: use a split the data ships with, unchanged. Otherwise hold out a stratified test \
+set, or use cross-validation for small data; split by group or time when rows are related. \
+Fit every preprocessing step on training data only. Choose on validation; evaluate on \
+test once, at the end.
+- Leakage: nothing from validation, test or the target may reach the training features.
+- Start with the simplest sensible baseline and a metric that fits the problem. Report \
+test results with the test size, and don't call differences smaller than the noise real.
+- Skills: before work a skill in the catalog covers, load it with invoke_skill and follow \
+it. In your final answer, name the skills you used ("From the data-splitting skill: ...") \
+and mark other method advice as general knowledge, not from a skill."""
 DATA_FILE = re.compile(r"[\w\-.]+\.(?:csv|tsv|txt|json|xlsx?|parquet)\b", re.IGNORECASE)
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT = f"""\
 You are a data scientist working in a live Jupyter kernel. Each `run_cell` call runs \
 Python in the same kernel (variables persist, like notebook cells) and is recorded in a \
 notebook the user downloads as an .ipynb file, so write clean, readable cells.
@@ -70,18 +84,21 @@ distinct values; flag constant columns and ID-like columns (one distinct value p
 6. Duplicate rows: how many.
 7. Summary statistics: describe() for numeric columns; count, unique, top and freq for text columns.
 
+{BASICS}
+
 When you are done, reply without calling a tool, in concise Markdown: the dataset's \
 size, key facts about the columns, data quality issues (missing values, duplicates, \
 suspicious types, constant or ID columns) and notable statistics. Use exact numbers \
 from your outputs. The notebook is saved automatically; don't paste its contents."""
 
 
-COLAB_PROMPT = """\
+COLAB_PROMPT = f"""\
 You are a data scientist building a notebook that runs on a Colab T4. You can't run cells \
 one by one: you write the draft, check it with a smoke run on this machine's CPU, and only \
 then run it on Colab (one run, at most 15 minutes, including the data download).
 
 Workflow
+0. Load the skills in the catalog below that fit the task (invoke_skill), one per call.
 1. Look before you write. For a Kaggle dataset (URL or owner/dataset) call \
 inspect_dataset with it; for uploaded files call inspect_dataset("data"). Base every \
 path, column name, label and count in your code on that report, never on guesses.
@@ -114,6 +131,8 @@ don't install them.
 explain that and ask the user to resolve it on Kaggle.
 - Don't use model files that ship with a dataset unless the task asks for them.
 - Declare uploaded inputs by exact data/ path; use [] when the notebook downloads its data.
+
+{BASICS}
 
 The task
 - Honor the user's model, preprocessing, split and evaluation requirements. Choose \
@@ -151,6 +170,7 @@ class DataScienceAgent(BaseAgent):
     brief = ("EDA on a tabular data file or model training on a dataset in Jupyter or Colab. "
              "Returns a notebook and artifacts.")
     delegatable = True
+    optional_skills_dirs = (KNOWLEDGE_SKILLS,)
     default_settings = {"max_steps": 25, "tool_timeout": 180, "compact_threshold_tokens": 40_000}
 
     def __init__(self, *args, **kwargs):
