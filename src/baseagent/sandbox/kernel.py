@@ -106,13 +106,15 @@ class KernelSandbox:
     def running(self) -> bool:
         return self.kc is not None
 
-    async def start(self, cwd: str | Path) -> None:
+    async def start(self, cwd: str | Path, env: dict[str, str] | None = None) -> None:
+        """Start the kernel in cwd. env adds variables (e.g. a smoke-run flag) to the
+        secret-free environment."""
         options: dict[str, Any] = {}
         if os.name == "posix":  # Unix sockets: no localhost TCP ports for anyone to reach
             self._ipc_dir = tempfile.mkdtemp(prefix="baseagent-kernel-")
             options = {"transport": "ipc", "ip": os.path.join(self._ipc_dir, "kernel")}
         self.km = AsyncKernelManager(kernel_name=self.kernel_name, **options)
-        await self.km.start_kernel(cwd=str(cwd), env=kernel_env())
+        await self.km.start_kernel(cwd=str(cwd), env={**kernel_env(), **(env or {})})
         self.kc = self.km.client()
         self.kc.start_channels()
         try:

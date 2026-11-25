@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
+import json
 import logging
 import mimetypes
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -19,24 +22,40 @@ import nbformat
 from IPython.core.inputtransformer2 import TransformerManager
 
 from baseagent.events import Attachment
-from baseagent.sandbox.kaggle import (
-    CARDS_INSTRUCTIONS,
-    CARDS_MANIFEST,
-    is_cards_dataset,
-    kaggle_dataset,
-    kaggle_download_source,
-)
-from baseagent.sandbox.kernel import CellResult
+from baseagent.sandbox.kaggle import kaggle_dataset, kaggle_download_source
+from baseagent.sandbox.kernel import CellResult, KernelSandbox
+from baseagent.sandbox.probe import DOWNLOAD_TIMEOUT, ensure_dataset
 from baseagent.sandbox.notebook import NOTEBOOK_MIME, SETUP_CODE, NotebookRecorder
 from baseagent.tools import ToolContext, ToolError, ToolResult, tool
 from baseagent.workspace import Workspace
 
 JOB_TIMEOUT = 900
 STOP_TIMEOUT = 30
+SMOKE_TIMEOUT = 300  # the whole smoke run, on this machine's CPU
+SMOKE_CELL_TIMEOUT = 180
+SMOKE_DIR = "outputs/smoke"
 FILENAME = re.compile(r"\w[\w.-]*")
 GPU_LINE = re.compile(r"^BASEAGENT_GPU=(.+)$", re.MULTILINE)
 END_MARKER = "BASEAGENT_NOTEBOOK_COMPLETE"
 LOGGER = logging.getLogger(__name__)
+# Kaggle credentials never belong in a notebook: public datasets download without them.
+CREDENTIALS = re.compile(r"kaggle\.json|KAGGLE_(?:KEY|USERNAME|API_TOKEN)|\.kaggle/", re.IGNORECASE)
+# Package installs are for Colab; the smoke run uses the packages installed here.
+PIP_INSTALL = re.compile(r"^(\s*)[!%]\s*pip\s+install\b.*$", re.MULTILINE)
+
+HARNESS = """\
+import os
+from pathlib import Path
+
+# Set by BaseAgent. SMOKE is True only in its quick CPU check before the Colab run:
+# then the notebook uses a tiny subset and one short epoch; everything else is the same.
+SMOKE = os.environ.get("BASEAGENT_SMOKE") == "1"
+# Write every file to return (weights, label maps, submissions) to OUTPUT_DIR.
+OUTPUT_DIR = Path(os.environ.get("BASEAGENT_OUTPUT_DIR")
+                  or ("/content" if Path("/content").is_dir() else "outputs"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+print("SMOKE:", SMOKE, "| OUTPUT_DIR:", OUTPUT_DIR)
+"""
 
 PREFLIGHT = """\
 from pathlib import Path
@@ -61,6 +80,7 @@ class ColabDraft:
     path: Path
     kaggle_handle: str | None = None
     cells: list[NotebookCell] = field(default_factory=list)
+    smoke_passed: str | None = None  # fingerprint of the draft that last passed a smoke run
 
     def attachment(self, workspace: Workspace) -> Attachment:
         return Attachment(kind="file", title=self.path.name, url=workspace.url(self.path), mime=NOTEBOOK_MIME)
@@ -89,15 +109,18 @@ def start_colab_notebook(title: str, kaggle_source: str | None = None, ctx: Tool
     ctx.state["colab_draft"] = ColabDraft(title.strip() or "Data science notebook",
                                          workspace.resolve(f"{folder}/colab_draft.ipynb"), handle)
     ctx.state.pop("colab_outputs", None)
-    message = "Started a Colab draft. Use save_colab_cell for the first authored cell."
+    message = ("Started a Colab draft. Use save_colab_cell for the first authored cell. Cells written by "
+               "BaseAgent come first and define SMOKE (bool) and OUTPUT_DIR (pathlib.Path).")
     if handle:
-        message += f" The notebook automatically downloads {handle} into dataset_root."
-        if is_cards_dataset(handle):
-            message += " " + CARDS_INSTRUCTIONS
+        message += (f" They also download {handle} and define dataset_root (pathlib.Path). If you "
+                    "haven't yet, call inspect_dataset to see what it contains.")
     return message
 
 
 def validate_colab_cell(code: str, number: int) -> None:
+    if CREDENTIALS.search(code):
+        raise ToolError("Don't use Kaggle credentials in the notebook. The download cell gets public "
+                        "datasets without them, as dataset_root; if Kaggle denies access, tell the user.")
     try:
         tree = ast.parse(TransformerManager().transform_cell(code))
     except SyntaxError as exc:
@@ -222,12 +245,11 @@ def make_notebook(cells: list[NotebookCell], inputs: list[str], hardware: str | 
     status = f"Executed on Google Colab using {hardware}." if hardware else "Colab draft. The cells have not run."
     recorder.add_markdown(f"# {title}\n\n{status}")
     recorder.add_code(SETUP_CODE, [], None)
+    recorder.add_markdown("## Notebook settings")
+    recorder.add_code(HARNESS, [], None)
     if kaggle_handle:
         recorder.add_markdown("## Download the Kaggle dataset")
         recorder.add_code(kaggle_download_source(kaggle_handle), [], None)
-        if is_cards_dataset(kaggle_handle):
-            recorder.add_markdown("## Validate the card labels and original splits")
-            recorder.add_code(CARDS_MANIFEST, [], None)
     for number, cell in enumerate(cells, start=1):
         recorder.add_markdown(cell.get("note", ""))
         recorder.add_code(cell["code"], [], None)
@@ -235,6 +257,98 @@ def make_notebook(cells: list[NotebookCell], inputs: list[str], hardware: str | 
     if hardware:
         recorder.add_code(f"print({END_MARKER!r})", [], None)
     return recorder.export(inputs)
+
+
+def fingerprint(draft: ColabDraft, inputs: list[str], outputs: list[str]) -> str:
+    """Identifies exactly what a smoke run checked: the cells, the dataset and the files."""
+    payload = json.dumps([draft.kaggle_handle, draft.cells, sorted(set(inputs)), sorted(set(outputs))])
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def check_outputs(outputs: list[str]) -> None:
+    if any(not FILENAME.fullmatch(name) or name == "analysis.ipynb" for name in outputs):
+        raise ToolError("Use plain output filenames such as submission.csv. analysis.ipynb is reserved.")
+
+
+def smoke_source(code: str) -> str:
+    return PIP_INSTALL.sub(lambda m: f"{m[1]}pass  # pip install skipped in the smoke run", code)
+
+
+def current_draft(ctx: ToolContext) -> ColabDraft:
+    draft = ctx.state.get("colab_draft")
+    if draft is None or not draft.cells:
+        raise ToolError("Start a Colab notebook draft and save its cells before running it.")
+    return draft
+
+
+@tool(exclusive=True, timeout=SMOKE_TIMEOUT + DOWNLOAD_TIMEOUT + 60)
+async def smoke_test_notebook(inputs: list[str], outputs: list[str], ctx: ToolContext = None) -> ToolResult:
+    """Run the whole draft here on CPU with SMOKE = True: the check before Colab.
+
+    Every cell runs from the top in a fresh kernel, as on Colab, with SMOKE True, so
+    the notebook must then use a tiny subset of the data and one short epoch. Fix any
+    failing cell and run this again. run_colab_notebook only accepts a draft that
+    passed, unchanged, with the same inputs and outputs.
+
+    Args:
+        inputs: Uploaded chat paths the notebook reads, such as data/train.csv. Use [] for none.
+        outputs: Filenames the notebook writes to OUTPUT_DIR, such as model.pt. Each must exist afterwards.
+    """
+    workspace = colab_workspace(ctx)
+    draft = current_draft(ctx)
+    draft.smoke_passed = None
+    check_outputs(outputs)
+    files = input_files(workspace, inputs)
+
+    output_dir = workspace.resolve(SMOKE_DIR)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True)
+    env = {"BASEAGENT_SMOKE": "1", "BASEAGENT_OUTPUT_DIR": str(output_dir), "MPLBACKEND": "Agg"}
+    if draft.kaggle_handle:
+        env["BASEAGENT_DATASET_ROOT"] = str(await ensure_dataset(draft.kaggle_handle, ctx))
+
+    notebook = make_notebook(draft.cells, list(files), title=draft.title, kaggle_handle=draft.kaggle_handle)
+    code_cells = [cell for cell in notebook.cells if cell.cell_type == "code"]
+    started = time.monotonic()
+    seen: list[str] = []
+    kernel = KernelSandbox()
+    await kernel.start(workspace.root, env)
+    try:
+        for index, cell in enumerate(code_cells, start=1):
+            number = cell.metadata.get("baseagent_cell")
+            where = f"authored cell {number}" if number else f"setup cell {index} (written by BaseAgent)"
+            remaining = SMOKE_TIMEOUT - (time.monotonic() - started)
+            if remaining < 5:
+                raise ToolError(f"The smoke run used its {SMOKE_TIMEOUT} s before {where}. When SMOKE is True, "
+                                "use a much smaller subset and fewer batches.")
+            await ctx.progress(f"Smoke run: {where}")
+            result = await kernel.execute(smoke_source(cell.source), timeout=min(SMOKE_CELL_TIMEOUT, remaining))
+            text = result.text()
+            if not result.ok:
+                message = f"Smoke run failed at {where}: {result.error or result.status}\n{text[-1500:]}"
+                if result.status in {"timeout", "restarted"}:
+                    message += ("\nWhen SMOKE is True, use a tiny subset (a few examples per class) and "
+                                "one short epoch.")
+                if seen:
+                    message += "\n\nOutput of the cells before it:\n" + "\n".join(seen[-3:])[-1500:]
+                raise ToolError(message)
+            if text:
+                seen.append(f"[{where}] {text[:500]}")
+    finally:
+        await kernel.shutdown()
+
+    missing = [name for name in dict.fromkeys(outputs) if not (output_dir / name).is_file()]
+    if missing:
+        raise ToolError(f"The smoke run finished, but OUTPUT_DIR has no {', '.join(missing)}. Write each "
+                        "declared output to OUTPUT_DIR / filename, also when SMOKE is True.")
+    draft.smoke_passed = fingerprint(draft, inputs, outputs)
+    elapsed = time.monotonic() - started
+    found = f" Outputs written: {', '.join(dict.fromkeys(outputs))}." if outputs else ""
+    summary = "\n".join(seen)[-3500:]
+    return ToolResult(f"Smoke run passed in {elapsed:.0f} s: all {len(code_cells)} code cells ran on CPU "
+                      f"with SMOKE = True.{found} Next: run_colab_notebook with the same inputs and outputs. "
+                      f"Smoke numbers come from a tiny subset; don't report them as results.\n\n{summary}",
+                      attachments=[draft.attachment(workspace)])
 
 
 def read_execution(path: Path, source: nbformat.NotebookNode) -> tuple[nbformat.NotebookNode, str]:
@@ -268,17 +382,19 @@ def read_execution(path: Path, source: nbformat.NotebookNode) -> tuple[nbformat.
 async def run_colab_notebook(inputs: list[str], outputs: list[str], ctx: ToolContext = None) -> ToolResult:
     """Execute the saved draft on a verified Colab T4 and return its files.
 
+    Only a draft that passed smoke_test_notebook, unchanged, with the same inputs and outputs.
+
     Args:
         inputs: Uploaded chat paths the notebook reads, such as data/train.csv. Use [] for none.
-        outputs: Filenames the notebook writes to its working directory, such as submission.csv.
+        outputs: Filenames the notebook writes to OUTPUT_DIR (/content on Colab), such as submission.csv.
     """
     workspace = colab_workspace(ctx)
-    draft = ctx.state.get("colab_draft")
-    if draft is None or not draft.cells:
-        raise ToolError("Start a Colab notebook draft and save its cells before running it.")
+    draft = current_draft(ctx)
     ctx.state["colab_outputs"] = [draft.attachment(workspace)]
-    if any(not FILENAME.fullmatch(name) or name == "analysis.ipynb" for name in outputs):
-        raise ToolError("Use plain output filenames such as submission.csv. analysis.ipynb is reserved.")
+    check_outputs(outputs)
+    if draft.smoke_passed != fingerprint(draft, inputs, outputs):
+        raise ToolError("Run smoke_test_notebook first, with these inputs and outputs. Colab only runs a "
+                        "draft that passed a smoke run after its last change.")
 
     binary = shutil.which("colab")
     if not binary:
