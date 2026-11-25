@@ -8,6 +8,7 @@ Override these (all optional):
     examples                     starter prompts for an empty chat
     default_settings             model/step defaults for this agent
     skills_dir                   folder of SKILL.md skills for this agent
+    optional_skills_dirs         more skills folders, skipped when missing
     delegatable                  True lets a coordinator hand it tasks
     system_prompt()              standing instructions
     get_tools()                  the tools it may call
@@ -86,6 +87,8 @@ class BaseAgent:
     default_settings: ClassVar[dict[str, Any]] = {}
     examples: ClassVar[list[str]] = []  # starter prompts shown in the chat room
     skills_dir: ClassVar[str | Path | None] = None
+    # Skills folders that may be missing (e.g. a private submodule); skipped when absent.
+    optional_skills_dirs: ClassVar[tuple[str | Path, ...]] = ()
     delegatable: ClassVar[bool] = False  # offered to the coordinator's `delegate` tool
     # Offered to the coordinator's `handoff` tool: the chat switches to this agent, which then
     # talks with the user directly (for interactive work such as chess lessons).
@@ -174,10 +177,12 @@ class BaseAgent:
         if self._ready:
             return
         await self.setup()
-        self._skills = SkillLibrary.load(self.skills_dir) if self.skills_dir else SkillLibrary()
+        self._skills = SkillLibrary.load(self.skills_dir, optional=self.optional_skills_dirs)
         tools = list(self.get_tools())
         if self._skills:
             tools.append(self._skills.as_tool())
+            if self._skills.has_extra_files():
+                tools.append(self._skills.file_tool())
         if self.handoff_parent:
             from baseagent.handoff import handoff_back
 

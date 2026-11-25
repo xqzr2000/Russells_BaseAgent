@@ -9,6 +9,13 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
+# The data scientist's skills (private repo). Optional: without access BaseAgent works without them.
+if git submodule update --init knowledge >/dev/null 2>&1; then
+  echo "Knowledge skills: $(find knowledge/skills -name SKILL.md 2>/dev/null | wc -l) skills in knowledge/."
+else
+  echo "Knowledge skills not available (no access to xqzr2000/jack-knows-it-all); continuing without them."
+fi
+
 uv sync                          # Python deps (incl. the data science kernel's) into .venv
 (cd web && npm ci)               # UI deps from web/package-lock.json
 if [ ! -f .env ] && [ -f .env.example ]; then cp .env.example .env; fi

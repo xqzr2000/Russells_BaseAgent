@@ -1,8 +1,12 @@
-.PHONY: setup colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup knowledge colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
 	cd web && npm ci
+
+knowledge:        ## pull the latest merged skills into knowledge/ (new chats use them; commit the moved pointer)
+	git submodule update --init --remote knowledge
+	@echo "knowledge/ is at $$(git -C knowledge log --oneline -1)"
 
 colab-setup:      ## install the isolated Google Colab CLI for T4 notebook runs
 	uv tool install google-colab-cli==0.8.0
