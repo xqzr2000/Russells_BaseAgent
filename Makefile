@@ -4,10 +4,6 @@ setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
 	cd web && npm ci
 
-.PHONY: eval-card
-eval-card:        ## grade an executed card-CNN notebook: make eval-card NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb
-	uv run python evals/card_cnn.py $(NOTEBOOK)
-
 colab-setup:      ## install the isolated Google Colab CLI for T4 notebook runs
 	uv tool install google-colab-cli==0.8.0
 
@@ -41,6 +37,10 @@ web:              ## chat room only (port 5173)
 
 test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
+
+.PHONY: eval-card
+eval-card:        ## grade an executed card-CNN notebook: make eval-card NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb
+	uv run python evals/card_cnn.py $(NOTEBOOK)
 
 sandbox-images:   ## build the code agent's sandbox images (needs Docker)
 	docker build -t baseagent-runner:1 docker/runner
