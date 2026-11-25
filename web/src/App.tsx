@@ -63,6 +63,11 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The agent server's id for this run (from /api/health). A different id means it
+  // restarted, e.g. after the Codespace was stopped and resumed, and the chats it kept
+  // in memory are gone.
+  const bootId = useRef<string | null>(null);
+  const [serverDown, setServerDown] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [changingSession, setChangingSession] = useState(false);
@@ -94,18 +99,50 @@ export default function App() {
       .catch((e) => setModelsError(String(e)));
   }, []);
 
+  // Load the server's config and agents, retrying until it answers: right after a
+  // Codespace starts, the chat room is up a few seconds before the agent server.
   useEffect(() => {
-    Promise.all([api.config(), api.agents()])
-      .then(([cfg, list]) => {
-        setConfig(cfg);
-        setAgents(list);
-        const preferred = list.find((a) => a.name === cfg.default_agent) ?? list[0];
-        if (preferred) setAgentName(preferred.name);
-      })
-      .catch(() => setError("Can't reach the agent server. Start it with `make dev`, then reload this page."));
-    refreshSessions();
-    loadModels();
+    let cancelled = false;
+    let timer: number | undefined;
+    const load = () => {
+      Promise.all([api.health(), api.config(), api.agents()])
+        .then(([health, cfg, list]) => {
+          if (cancelled) return;
+          bootId.current = health.boot_id;
+          setServerDown(false);
+          setConfig(cfg);
+          setAgents(list);
+          const preferred = list.find((a) => a.name === cfg.default_agent) ?? list[0];
+          if (preferred) setAgentName(preferred.name);
+          refreshSessions();
+          loadModels();
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setServerDown(true);
+          timer = window.setTimeout(load, 2000);
+        });
+    };
+    load();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [loadModels, refreshSessions]);
+
+  /** Is the agent server up, and is it still the run this page started with? */
+  const checkServer = useCallback(async (): Promise<"up" | "down" | "restarted"> => {
+    try {
+      const { boot_id } = await api.health();
+      setServerDown(false);
+      const restarted = bootId.current !== null && boot_id !== bootId.current;
+      bootId.current = boot_id;
+      return restarted ? "restarted" : "up";
+    } catch {
+      setServerDown(true);
+      return "down";
+    }
+  }, []);
 
   const closeSidebar = useCallback(() => {
     setSidebarOpen(false);
@@ -177,6 +214,47 @@ export default function App() {
     if (sidebarOpen) closeSidebar();
   };
 
+  /** The server restarted: the chat on screen no longer exists there. Keep the draft. */
+  const forgetChats = () => {
+    showSession(null);
+    setEvents([]);
+    setChessNotice(null);
+    setAttachments([]);
+    setError("The agent server restarted, so earlier chats are gone. Your next message starts a new chat.");
+    refreshSessions();
+  };
+  const onRestart = useRef(forgetChats);
+  onRestart.current = forgetChats;
+
+  // Coming back to the tab (e.g. after resuming the Codespace): check the server, and
+  // keep checking every few seconds while it can't be reached.
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState !== "visible") return;
+      checkServer().then((state) => {
+        if (state === "restarted") onRestart.current();
+      });
+    };
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    const timer = serverDown ? window.setInterval(check, 3000) : undefined;
+    return () => {
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+      window.clearInterval(timer);
+    };
+  }, [checkServer, serverDown]);
+
+  /** After a failed request: true if the cause was a restarted or unreachable server. */
+  const handledServerLoss = async (e: unknown): Promise<boolean> => {
+    const state = await checkServer();
+    if (state === "restarted" || (e instanceof Error && e.message.includes("No session"))) {
+      onRestart.current();
+      return true;
+    }
+    return state === "down";
+  };
+
   const openSession = async (id: string) => {
     if (sessionLocked) return;
     setChangingSession(true);
@@ -192,7 +270,7 @@ export default function App() {
       stickToBottom.current = true;
     } catch (e) {
       if (sidebarOpen) closeSidebar();
-      setError(e instanceof Error ? e.message : String(e));
+      if (!(await handledServerLoss(e))) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setChangingSession(false);
     }
@@ -233,6 +311,7 @@ export default function App() {
         setAttachments((prev) => [...prev.filter((a) => a.path !== uploaded.path), uploaded]);
       }
     } catch (e) {
+      if (await handledServerLoss(e)) return;
       setError(`Upload failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setUploading(false);
@@ -267,8 +346,9 @@ export default function App() {
         setEvents(detail.events);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
       setDraft((d) => d || content);
+      if (await handledServerLoss(e)) return; // the old chat (and its uploads) is gone
+      setError(e instanceof Error ? e.message : String(e));
       setAttachments((a) => (a.length ? a : pending));
     } finally {
       setBusy(false);
@@ -453,7 +533,14 @@ export default function App() {
           )}
 
           <footer className="composer-wrap column">
-            {error && <p className="form-error" role="alert">{error}</p>}
+            {serverDown ? (
+              <p className="form-error" role="status">
+                Waiting for the agent server… In a Codespace it starts by itself; if this stays,
+                check <code>make dev-log</code> or run <code>make dev</code>.
+              </p>
+            ) : (
+              error && <p className="form-error" role="alert">{error}</p>
+            )}
             <form
               className="composer"
               onSubmit={(e) => {

@@ -1,4 +1,4 @@
-.PHONY: setup colab-setup colab-login colab-check dev server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -16,8 +16,18 @@ colab-login:      ## sign in to Google once for Colab T4 runs (kept across rebui
 colab-check:      ## confirm the Colab CLI can use your Google sign-in
 	colab --auth adc usage
 
-dev:              ## agent server + chat room with hot reload; open port 5173
+dev:              ## agent server + chat room with hot reload in this terminal; open port 5173
 	bash scripts/dev.sh
+
+start:            ## the same, in the background (the dev container does this on every start/resume)
+	bash scripts/background.sh start
+
+stop:             ## stop the background chat room
+	bash scripts/background.sh stop
+
+dev-log:          ## follow the background chat room's log
+	@touch runs/dev-server.log 2>/dev/null || (mkdir -p runs && touch runs/dev-server.log)
+	tail -n 50 -f runs/dev-server.log
 
 server:           ## agent server only (port 8000, auto-reload)
 	uv run uvicorn baseagent.server.app:app --host 0.0.0.0 --port 8000 --reload --reload-dir src --reload-dir skills

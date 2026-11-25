@@ -30,7 +30,9 @@
     "8000": { "label": "Agent API", "onAutoForward": "silent" }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
-  "postAttachCommand": "echo 'Run `make dev`, then open the Chat room port (5173).'",
+  // Every start and resume: bring the chat room up in the background (make dev-log, make stop).
+  "postStartCommand": "bash scripts/background.sh start --auto",
+  "postAttachCommand": "echo 'The chat room starts by itself: open the Chat room port (5173). Logs: make dev-log. Run in this terminal instead: make dev.'",
   "customizations": {
     "vscode": {
       "extensions": [

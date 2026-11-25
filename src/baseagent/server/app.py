@@ -25,6 +25,7 @@ import json
 import os
 import re
 import time
+import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -147,9 +148,14 @@ def create_app(llm: LLMClient | None = None, log_dir: Path | None = None,
             raise HTTPException(404, "This chat has no file workspace.")
         return session.workspace
 
+    # A new id each time the server starts. Chats live in this process's memory, so the
+    # UI uses a changed id to tell that the chats it shows are gone (e.g. after the
+    # Codespace was stopped and resumed).
+    boot_id = uuid.uuid4().hex
+
     @app.get("/api/health")
     async def health():
-        return {"ok": True}
+        return {"ok": True, "boot_id": boot_id}
 
     @app.get("/api/config")
     async def config():
