@@ -9,7 +9,10 @@
   },
   "containerEnv": {
     "UV_LINK_MODE": "copy",
-    "UV_PYTHON_PREFERENCE": "only-system"
+    "UV_PYTHON_PREFERENCE": "only-system",
+    // Google sign-in for Colab T4 runs lives outside the repo and outside $HOME, so it
+    // survives container rebuilds (Codespaces keeps /workspaces) and is never committed.
+    "CLOUDSDK_CONFIG": "/workspaces/.gcloud"
   },
   "remoteEnv": {
     "PATH": "${containerEnv:HOME}/.local/bin:${containerEnv:PATH}"
