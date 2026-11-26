@@ -194,3 +194,30 @@ def test_the_newest_run_is_graded_by_default(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(card_cnn, "newest_notebook", lambda: newest)
     assert card_cnn.main(["--image", str(image)]) == 0
     assert "Grading workspace/new/outputs/baseagent-1/analysis.ipynb" in capsys.readouterr().out
+
+
+def test_run_2_shapes_pass(tmp_path):
+    """Run 2 (2026-11-26): rank and suit on the line after the test line, a demo line after a
+    test image's path, and a training helper whose default is a lowercase setting."""
+    metrics = ("Test exact-card accuracy: 0.9308 on 260 examples\n"
+               "Rank accuracy: 0.9462, Suit accuracy: 0.9731")
+    helper = "\nwarmup = 0.05\ndef lr_at(elapsed, budget, peak, warmup=warmup):\n    return peak"
+    demo = PREDICT.replace("print(predict(example_path))",
+                           'print("Demo image: /data/test/ace of clubs/1.jpg")\n'
+                           'print("Predicted: ace of clubs (rank=ace, suit=clubs), confidence=0.998")')
+    notebook, out, image = build(tmp_path, metrics=metrics, extra_code=helper, predict=demo)
+    results = {r.name: r for r in card_cnn.grade_notebook(notebook, out, image).results}
+    assert results["metrics"].status == "PASS"
+    assert results["metrics"].detail == "exact 0.931, rank 0.946, suit 0.973"
+    assert results["inference"].status == "PASS", results["inference"].detail
+
+
+def test_validation_lines_after_a_test_line_are_not_test_results():
+    grade = card_cnn.Grade()
+    card_cnn.check_metrics(["test exact accuracy 0.90\nvalidation rank accuracy 0.99\nsuit accuracy 0.97"], grade)
+    assert grade.results[0].status == "FAIL" and "rank" in grade.results[0].detail
+
+
+def test_a_def_whose_default_needs_training_state_is_left_out():
+    chunks = card_cnn.definitions(["model = train()\ndef f(m=model):\n    return m\ndef g():\n    return 1"], set())
+    assert "def g" in chunks[0] and "def f" not in chunks[0]
