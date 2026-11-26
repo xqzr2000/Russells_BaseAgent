@@ -43,7 +43,7 @@ test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
 
 .PHONY: eval-card
-eval-card:        ## grade an executed card-CNN notebook: make eval-card NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb
+eval-card:        ## grade the newest card-CNN Colab run (or NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb)
 	uv run python evals/card_cnn.py $(NOTEBOOK)
 
 sandbox-images:   ## build the code agent's sandbox images (needs Docker)
