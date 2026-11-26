@@ -1,6 +1,8 @@
 """Grade an executed card-CNN notebook (eval case 1), run by hand.
 
-    uv run python evals/card_cnn.py path/to/analysis.ipynb [--outputs DIR] [--image IMAGE]
+    uv run python evals/card_cnn.py [path/to/analysis.ipynb] [--outputs DIR] [--image IMAGE]
+
+Without a notebook it grades the newest workspace/*/outputs/baseagent-*/analysis.ipynb.
 
 The task: train a small CNN on gpiosenka/cards-image-datasetclassification that
 predicts rank and suit from full-card images, using the dataset's own splits and
@@ -12,13 +14,16 @@ Checks (PASS, FAIL or WARN), each tied to a requirement or a skill:
   jokers         the joker count excluded matches the data (125)
   test size      the test set has the expected size after exclusion (260)
   label map      label_map.json has exactly the 52 cards, with consistent parts
+                 (the table may sit one level down, e.g. {"label_map": {...}, "ranks": [...]})
   metrics        exact, rank and suit test accuracies are printed, and
                  exact <= rank, suit (parts come from the predicted card: composite-labels)
   splits         no re-splitting of the shipped splits (data-splitting)
   hygiene        no Kaggle credentials, no model files shipped with the dataset
   outputs        card_cnn.pt and label_map.json exist
-  inference      predict(image) works in a fresh session from the saved files,
-                 with only the notebook's functions, classes and constants
+  inference      predict(image) works in a fresh session from the saved files: the
+                 notebook's functions, classes and constants, then the whole cell
+                 that defines predict() (e.g. a model loaded once from card_cnn.pt);
+                 statements in that cell that fail, such as demo lines, are skipped
 
 Exit code 1 if any check fails.
 """
@@ -44,6 +49,7 @@ CARD_TEXT = re.compile(rf"\b({'|'.join(RANKS)}) of ({'|'.join(SUITS)})\b", re.IG
 METRIC = re.compile(r"\b(exact[- ]?card|exact|rank|suit)\b[^0-9\n]{0,30}?(\d+(?:\.\d+)?)(\s*%)?", re.IGNORECASE)
 HANDLE = "gpiosenka/cards-image-datasetclassification"
 INFERENCE_TIMEOUT = 180
+ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass
@@ -138,6 +144,30 @@ def check_counts(text: str, cell_texts: list[str], spec: Spec, grade: Grade) -> 
               sized[0].strip()[:120] if sized else f"no output line shows {spec.test_images} test images")
 
 
+def table_entries(data) -> list:
+    if isinstance(data, dict) and data and all(isinstance(v, int) for v in data.values()):
+        return list(data)  # {"ace of clubs": 0, ...}
+    return list(data.values()) if isinstance(data, dict) else list(data) if isinstance(data, list) else []
+
+
+def card_count(data) -> int:
+    found = set()
+    for entry in table_entries(data):
+        strings = [entry] if isinstance(entry, str) else \
+            [v for v in entry.values() if isinstance(v, str)] if isinstance(entry, dict) else []
+        found |= {s.lower() for s in strings if s.lower() in CARDS}
+    return len(found)
+
+
+def unwrap(data):
+    """The card table: the file itself, or the value one level down that names the most cards."""
+    if not isinstance(data, dict):
+        return data
+    nested = [v for v in data.values() if isinstance(v, (dict, list))]
+    best = max(nested, key=card_count, default=None)
+    return best if best is not None and card_count(best) > card_count(data) else data
+
+
 def check_label_map(path: Path, grade: Grade) -> None:
     if not path.is_file():
         grade.add("label map", False, f"{path.name} is missing")
@@ -147,9 +177,8 @@ def check_label_map(path: Path, grade: Grade) -> None:
     except json.JSONDecodeError as exc:
         grade.add("label map", False, f"{path.name} is not valid JSON: {exc}")
         return
-    entries = list(data.values()) if isinstance(data, dict) else list(data)
-    if isinstance(data, dict) and all(isinstance(v, int) for v in data.values()):
-        entries = list(data)  # {"ace of clubs": 0, ...}
+    data = unwrap(data)
+    entries = table_entries(data)
     names, problems = set(), []
     for entry in entries:
         strings = [entry] if isinstance(entry, str) else [v for v in entry.values() if isinstance(v, str)] \
@@ -268,6 +297,15 @@ def definitions(cells: list[str], known: set[str]) -> list[str]:
     return chunks
 
 
+def defines_predict(source: str) -> bool:
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "predict"
+               for n in parse_cell(source))
+
+
+def statements(source: str) -> list[str]:
+    return [ast.unparse(node) for node in parse_cell(source)]
+
+
 def harness_names(sources: list[str]) -> set[str]:
     names: set[str] = set()
     for source in sources:
@@ -281,7 +319,7 @@ INFERENCE = r"""\
 import contextlib, io, json, sys
 from IPython.core.interactiveshell import InteractiveShell
 shell = InteractiveShell.instance()
-setup = json.loads(sys.argv[1])
+setup, cell = json.loads(sys.argv[1]), json.loads(sys.argv[3])
 for chunk in setup:
     chunk = "\n".join(line for line in chunk.splitlines() if not line.lstrip().startswith("%matplotlib"))
     result = shell.run_cell(chunk, silent=True)
@@ -289,6 +327,13 @@ for chunk in setup:
         error = result.error_in_exec or result.error_before_exec
         print(json.dumps({"error": f"while defining: {type(error).__name__}: {error}"}))
         sys.exit(0)
+skipped = []  # statements of the predict() cell that failed, e.g. demo lines
+for statement in cell:
+    with contextlib.redirect_stdout(io.StringIO()):
+        result = shell.run_cell(statement, silent=True)
+    if not result.success:
+        error = result.error_in_exec or result.error_before_exec
+        skipped.append(f"{statement.splitlines()[0][:60]!r}: {type(error).__name__}: {error}")
 predict = shell.user_ns.get("predict")
 if predict is None:
     print(json.dumps({"error": "the notebook defines no predict() function"}))
@@ -298,9 +343,9 @@ try:
     with contextlib.redirect_stdout(captured):
         value = predict(sys.argv[2])
 except Exception as exc:
-    print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}))
+    print(json.dumps({"error": f"{type(exc).__name__}: {exc}", "skipped": skipped}))
 else:
-    print(json.dumps({"value": repr(value), "stdout": captured.getvalue()}))
+    print(json.dumps({"value": repr(value), "stdout": captured.getvalue(), "skipped": skipped}))
 """
 
 
@@ -323,10 +368,14 @@ def check_inference(notebook, outputs: Path, image: Path | None, grade: Grade) -
     # BaseAgent's setup (imports) and notebook-settings (OUTPUT_DIR) cells; not the data download.
     harness = [c.source for c in cells if not c.metadata.get("baseagent_cell")
                and ("pd.set_option(" in c.source or "BASEAGENT_OUTPUT_DIR" in c.source)]
-    setup = harness + definitions([c.source for c in authored(notebook)], harness_names(harness))
+    sources = [c.source for c in authored(notebook)]
+    cell = next((s for s in reversed(sources) if defines_predict(s)), None)
+    others = [s for s in sources if s is not cell]
+    setup = harness + definitions(others, harness_names(harness))
     env = {**os.environ, "BASEAGENT_OUTPUT_DIR": str(outputs), "MPLBACKEND": "Agg"}
     try:
-        run = subprocess.run([sys.executable, "-c", INFERENCE, json.dumps(setup), str(image)],
+        run = subprocess.run([sys.executable, "-c", INFERENCE, json.dumps(setup), str(image),
+                              json.dumps(statements(cell) if cell else [])],
                              capture_output=True, text=True, timeout=INFERENCE_TIMEOUT, env=env, cwd=outputs)
         answer = json.loads(run.stdout.strip().splitlines()[-1])
     except subprocess.TimeoutExpired:
@@ -335,9 +384,11 @@ def check_inference(notebook, outputs: Path, image: Path | None, grade: Grade) -
     except (json.JSONDecodeError, IndexError):
         grade.add("inference", False, f"the check itself failed: {(run.stderr or run.stdout)[-200:]}")
         return
+    skipped = answer.get("skipped") or []
     if "error" in answer:
-        grade.add("inference", False, answer["error"][:200] + " - predict() must work from the saved files "
-                  "alone, using only the notebook's functions, classes and constants")
+        cause = f" (skipped in its cell: {skipped[0][:160]})" if skipped else ""
+        grade.add("inference", False, answer["error"][:200] + cause + " - predict() must work from the "
+                  "saved files alone: the notebook's functions, classes and constants, plus its own cell")
         return
     said = CARD_TEXT.search(answer["value"]) or CARD_TEXT.search(answer["stdout"])
     true = image.parent.name.lower()
@@ -346,7 +397,8 @@ def check_inference(notebook, outputs: Path, image: Path | None, grade: Grade) -
     else:
         card = said.group(0).lower()
         grade.add("inference", True, f"{image.parent.name}/{image.name} -> {card}"
-                  + (" (correct)" if card == true else f" (true: {true})" if true in CARDS else ""))
+                  + (" (correct)" if card == true else f" (true: {true})" if true in CARDS else "")
+                  + (f"; {len(skipped)} statement(s) in its cell skipped" if skipped else ""))
 
 
 def grade_notebook(path: Path, outputs: Path, image: Path | None, spec: Spec = Spec()) -> Grade:
@@ -363,9 +415,15 @@ def grade_notebook(path: Path, outputs: Path, image: Path | None, spec: Spec = S
     return grade
 
 
+def newest_notebook(root: Path = ROOT) -> Path | None:
+    found = list((root / "workspace").glob("*/outputs/baseagent-*/analysis.ipynb"))
+    return max(found, key=lambda p: p.stat().st_mtime, default=None)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Grade an executed card-CNN notebook.")
-    parser.add_argument("notebook", type=Path, help="the executed notebook (analysis.ipynb)")
+    parser.add_argument("notebook", type=Path, nargs="?",
+                        help="the executed notebook (default: the newest Colab run in workspace/)")
     parser.add_argument("--outputs", type=Path, help="folder with card_cnn.pt and label_map.json "
                                                      "(default: the notebook's folder)")
     parser.add_argument("--image", type=Path, help="a full-card image for predict() "
@@ -375,6 +433,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="print the results as JSON")
     args = parser.parse_args(argv)
 
+    if args.notebook is None:
+        args.notebook = newest_notebook()
+        if args.notebook is None:
+            parser.error("no workspace/*/outputs/baseagent-*/analysis.ipynb found; pass the notebook")
+        print(f"Grading {args.notebook.relative_to(ROOT)}\n")
     outputs = (args.outputs or args.notebook.parent).resolve()
     image = args.image or default_image()
     grade = grade_notebook(args.notebook, outputs, image, Spec(args.jokers, args.test_images))

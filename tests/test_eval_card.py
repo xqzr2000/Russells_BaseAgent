@@ -124,3 +124,73 @@ def test_joker_counts_are_read_in_either_form(line, total):
     grade = card_cnn.Grade()
     card_cnn.check_counts(line, [line], card_cnn.Spec(jokers=total), grade)
     assert grade.results[0].status == "PASS"
+
+
+LOAD_ONCE = '''\
+import json
+from pathlib import Path
+
+def load_model_for_inference(weights):
+    labels = json.loads((OUTPUT_DIR / "label_map.json").read_text())["label_map"]
+    return Path(weights).read_bytes(), labels
+
+model_inf, labels_inf = load_model_for_inference(OUTPUT_DIR / "card_cnn.pt")
+
+def predict(path):
+    card = labels_inf[str(len(Path(path).parent.name) % 52)]
+    return f"{card['rank']} of {card['suit']}", 0.5
+
+print(predict(test_df.path[0]))'''
+
+
+def nest_label_map(out: Path) -> None:
+    table = json.loads((out / "label_map.json").read_text())
+    (out / "label_map.json").write_text(json.dumps({
+        "label_map": table, "ranks": card_cnn.RANKS, "suits": card_cnn.SUITS}))
+
+
+def test_run_1_shapes_pass(tmp_path):
+    """Run 1 (2026-11-25): a nested label map and a model loaded once in the predict() cell."""
+    notebook, out, image = build(tmp_path, predict=LOAD_ONCE)
+    nest_label_map(out)
+    results = {r.name: r for r in card_cnn.grade_notebook(notebook, out, image).results}
+    assert results["label map"].status == "PASS", results["label map"].detail
+    assert results["inference"].status == "PASS", results["inference"].detail
+    assert "1 statement(s) in its cell skipped" in results["inference"].detail  # the test_df demo line
+
+
+def test_a_nested_table_must_still_hold_the_52_cards(tmp_path):
+    notebook, out, image = build(tmp_path)
+    table = json.loads((out / "label_map.json").read_text())
+    del table["0"]
+    (out / "label_map.json").write_text(json.dumps({"label_map": table, "ranks": card_cnn.RANKS}))
+    result = next(r for r in card_cnn.grade_notebook(notebook, out, image).results if r.name == "label map")
+    assert result.status == "FAIL" and "51 entries" in result.detail
+
+
+def test_a_failed_load_in_the_predict_cell_is_named(tmp_path):
+    notebook, out, image = build(tmp_path, predict=LOAD_ONCE)
+    nest_label_map(out)
+    (out / "card_cnn.pt").unlink()
+    result = next(r for r in card_cnn.grade_notebook(notebook, out, image).results if r.name == "inference")
+    assert result.status == "FAIL"
+    assert "labels_inf" in result.detail and "skipped in its cell" in result.detail
+    assert "FileNotFoundError" in result.detail
+
+
+def test_the_newest_run_is_graded_by_default(tmp_path, monkeypatch, capsys):
+    import os
+    notebook, out, image = build(tmp_path)
+    for chat, age in (("old", 100), ("new", 0)):
+        run = tmp_path / "workspace" / chat / "outputs" / "baseagent-1"
+        run.mkdir(parents=True)
+        for f in out.iterdir():
+            (run / f.name).write_bytes(f.read_bytes())
+        stamp = (run / "analysis.ipynb").stat().st_mtime - age
+        os.utime(run / "analysis.ipynb", (stamp, stamp))
+    newest = tmp_path / "workspace/new/outputs/baseagent-1/analysis.ipynb"
+    assert card_cnn.newest_notebook(tmp_path) == newest
+    monkeypatch.setattr(card_cnn, "ROOT", tmp_path)
+    monkeypatch.setattr(card_cnn, "newest_notebook", lambda: newest)
+    assert card_cnn.main(["--image", str(image)]) == 0
+    assert "Grading workspace/new/outputs/baseagent-1/analysis.ipynb" in capsys.readouterr().out
