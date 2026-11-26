@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import asyncio
 import csv
 import json
@@ -363,6 +365,38 @@ def test_cells_cannot_use_kaggle_credentials(fake_colab, tmp_path, code):
     start_colab_notebook.handler("Cards", kaggle_source=CARDS_DATASET, ctx=ctx)
     with pytest.raises(ToolError, match="Kaggle credentials"):
         save_colab_cell.handler(1, code, ctx=ctx)
+
+
+RUN_1_FALLBACK = """\
+try:
+    OUTPUT_DIR
+except NameError:
+    OUTPUT_DIR = Path('/content')
+print(OUTPUT_DIR)"""
+
+
+@pytest.mark.parametrize("code, name", [
+    (RUN_1_FALLBACK, "OUTPUT_DIR (line 4)"),  # run 1 (2026-11-25): broke the smoke run on /content
+    ("SMOKE = False", "SMOKE (line 1)"),
+    ("for dataset_root in roots:\n    pass", "dataset_root (line 1)"),
+    ("def f():\n    global SMOKE\n    SMOKE = True", "SMOKE (line 2)"),
+    ("del OUTPUT_DIR", "OUTPUT_DIR (line 1)"),
+])
+def test_cells_cannot_reassign_harness_variables(fake_colab, tmp_path, code, name):
+    ctx = tool_context(tmp_path)
+    start_colab_notebook.handler("Cards", kaggle_source=CARDS_DATASET, ctx=ctx)
+    with pytest.raises(ToolError, match=rf"reassigns {re.escape(name)}.*no fallback"):
+        save_colab_cell.handler(1, code, ctx=ctx)
+    assert ctx.state["colab_draft"].cells == []
+
+
+def test_cells_may_read_harness_variables_and_name_their_own(fake_colab, tmp_path):
+    ctx = tool_context(tmp_path)
+    start_colab_notebook.handler("Uploaded data", ctx=ctx)  # no Kaggle download: dataset_root is free
+    code = ('if SMOKE:\n    rows = rows[:20]\nout = OUTPUT_DIR / "model.pt"\n'
+            'def save(path=OUTPUT_DIR):\n    return path\ndataset_root = Path("data")\nWORK = Path("/tmp/work")')
+    save_colab_cell.handler(1, code, ctx=ctx)
+    assert len(ctx.state["colab_draft"].cells) == 1
 
 
 def card_like_dataset(root: Path) -> Path:

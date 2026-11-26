@@ -117,7 +117,21 @@ def start_colab_notebook(title: str, kaggle_source: str | None = None, ctx: Tool
     return message
 
 
-def validate_colab_cell(code: str, number: int) -> None:
+HARNESS_NAMES = ("SMOKE", "OUTPUT_DIR")  # plus dataset_root when the draft downloads a Kaggle dataset
+
+
+def rebound_harness_names(tree: ast.AST, names: tuple[str, ...]) -> list[tuple[str, int]]:
+    """Places a cell assigns, deletes or declares global one of BaseAgent's variables."""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)) and node.id in names:
+            found.append((node.id, node.lineno))
+        elif isinstance(node, ast.Global):
+            found += [(name, node.lineno) for name in node.names if name in names]
+    return sorted(set(found), key=lambda item: item[1])
+
+
+def validate_colab_cell(code: str, number: int, harness_names: tuple[str, ...] = HARNESS_NAMES) -> None:
     if CREDENTIALS.search(code):
         raise ToolError("Don't use Kaggle credentials in the notebook. The download cell gets public "
                         "datasets without them, as dataset_root; if Kaggle denies access, tell the user.")
@@ -125,6 +139,13 @@ def validate_colab_cell(code: str, number: int) -> None:
         tree = ast.parse(TransformerManager().transform_cell(code))
     except SyntaxError as exc:
         raise ToolError(f"Cell {number} has invalid Python at line {exc.lineno}: {exc.msg}.") from exc
+    rebound = rebound_harness_names(tree, harness_names)
+    if rebound:
+        where = ", ".join(f"{name} (line {line})" for name, line in rebound)
+        raise ToolError(f"Cell {number} reassigns {where}. BaseAgent's cells define "
+                        f"{', '.join(harness_names)} in every run, smoke and Colab alike: use them as they "
+                        "are, with no fallback such as try/except NameError, and pick other names for "
+                        "your own variables.")
     for node in ast.walk(tree):
         invalid_import = (isinstance(node, ast.ImportFrom) and node.module == "kagglehub"
                           and any(name.name == "KaggleHub" for name in node.names))
@@ -154,7 +175,7 @@ def save_colab_cell(number: int, code: str, note: str = "", ctx: ToolContext = N
     if not 1 <= number <= len(draft.cells) + 1:
         raise ToolError(f"Choose a cell number from 1 to {len(draft.cells) + 1}.")
 
-    validate_colab_cell(code, number)
+    validate_colab_cell(code, number, HARNESS_NAMES + (("dataset_root",) if draft.kaggle_handle else ()))
     cells = list(draft.cells)
     cells[number - 1:number] = [{"code": code, "note": note}]
     notebook = make_notebook(cells, [], title=draft.title, kaggle_handle=draft.kaggle_handle)

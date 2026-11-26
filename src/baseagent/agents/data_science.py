@@ -105,23 +105,31 @@ path, column name, label and count in your code on that report, never on guesses
 2. start_colab_notebook (pass the Kaggle URL as kaggle_source). Cells written by BaseAgent \
 come first and define:
    - SMOKE (bool): True only in the smoke run.
-   - OUTPUT_DIR (pathlib.Path): write every file to return here, e.g. OUTPUT_DIR / "model.pt".
+   - OUTPUT_DIR (pathlib.Path): write only the files to return here, e.g. OUTPUT_DIR / "model.pt". \
+Keep caches and intermediate tensors in memory or under /tmp.
    - dataset_root (pathlib.Path), for a Kaggle dataset. It can be read-only on Colab.
-   Use these variables; don't redefine them or download the data again.
+   Use these variables as they are, in every run: no fallbacks, no reassigning (save_colab_cell \
+refuses a cell that does), and don't download the data again.
 3. save_colab_cell: one short, complete cell per tool call, one call per response. Give \
 each cell a Markdown note (a "## Heading" and a sentence). Edit a cell by saving its number \
 again. Split a cell if its tool call gets long.
 4. smoke_test_notebook(inputs, outputs). It runs every cell from the top with SMOKE = True. \
 When SMOKE is True the notebook must use a tiny subset (a few examples per class) and one \
 short epoch or a few batches, but otherwise run exactly the same code, including writing \
-every declared output. Fix the cell it reports and run it again until it passes.
+every declared output. Fix the cell it reports and run it again until it passes. Outputs are \
+the files you write to OUTPUT_DIR; analysis.ipynb is added for you.
 5. run_colab_notebook with the same inputs and outputs. It refuses a draft that hasn't \
 passed a smoke run since its last change.
 
 Writing the cells
-- Build your own table of examples (path, label, split, ...) from the report. Before \
-training, assert what the report and the task lead you to expect: the class count, \
-non-empty splits, the excluded rows. Print the counts you'll need to report.
+- Build your own table of examples (path, label, split, ...) from the report, over the full \
+data in every run, SMOKE included: apply the exclusions and handle every problem the report \
+flags (such as rows that aren't files), then check that every path in the table exists. Only \
+then take the SMOKE subset, for decoding and training. A problem the subset skips would \
+otherwise first appear on Colab.
+- Before training, assert what the report and the task lead you to expect: the class count, \
+non-empty splits, the excluded rows. Print the counts you'll need to report, from the rows \
+actually used.
 - Print what someone would need to debug a failure: shapes, counts, column names.
 - Devices: device = torch.device("cuda" if torch.cuda.is_available() else "cpu"); never \
 assume a GPU. Colab already has torch, torchvision, numpy, pandas, scikit-learn and Pillow: \
