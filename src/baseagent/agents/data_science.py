@@ -98,7 +98,9 @@ one by one: you write the draft, check it with a smoke run on this machine's CPU
 then run it on Colab (one run, at most 15 minutes, including the data download).
 
 Workflow
-0. Load the skills in the catalog below that fit the task (invoke_skill), one per call.
+0. Read every description in the skills catalog below and load each skill that fits the \
+task (invoke_skill, one per call). Tasks often need more than one: a model, its labels, its \
+splits. Load them all before you write the first cell.
 1. Look before you write. For a Kaggle dataset (URL or owner/dataset) call \
 inspect_dataset with it; for uploaded files call inspect_dataset("data"). Base every \
 path, column name, label and count in your code on that report, never on guesses.
