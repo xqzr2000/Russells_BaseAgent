@@ -15,13 +15,15 @@ Checks (PASS, FAIL or WARN), each tied to a requirement or a skill:
   test size      the test set has the expected size after exclusion (260)
   label map      label_map.json has exactly the 52 cards, with consistent parts
                  (the table may sit one level down, e.g. {"label_map": {...}, "ranks": [...]})
-  metrics        exact, rank and suit test accuracies are printed, and
+  metrics        exact, rank and suit test accuracies are printed (on a line that says
+                 "test", or after one in the same cell output), and
                  exact <= rank, suit (parts come from the predicted card: composite-labels)
   splits         no re-splitting of the shipped splits (data-splitting)
   hygiene        no Kaggle credentials, no model files shipped with the dataset
   outputs        card_cnn.pt and label_map.json exist
   inference      predict(image) works in a fresh session from the saved files: the
-                 notebook's functions, classes and constants, then the whole cell
+                 notebook's functions, classes and constants (functions whose defaults
+                 need training state are left out), then the whole cell
                  that defines predict() (e.g. a model loaded once from card_cnn.pt);
                  statements in that cell that fail, such as demo lines, are skipped
 
@@ -205,11 +207,28 @@ def check_label_map(path: Path, grade: Grade) -> None:
         grade.add("label map", True, "52 cards, parts consistent")
 
 
-def check_metrics(text: str, grade: Grade) -> None:
+def test_lines(cell_texts: list[str]) -> list[str]:
+    """Lines that report test results: they say "test", or follow such a line in the same cell
+    output and report an accuracy without naming another split (e.g. "Test exact-card
+    accuracy: 0.93" then "Rank accuracy: 0.95"). A demo line such as "Predicted: ace of clubs
+    (rank=ace), confidence=0.998" after a test image's path is not a result."""
+    lines = []
+    for text in cell_texts:
+        in_test = False
+        for line in text.splitlines():
+            if re.search(r"\btest\b", line, re.IGNORECASE):
+                in_test = True
+                lines.append(line)
+            elif re.search(r"\b(val|valid|validation|train|training)\b", line, re.IGNORECASE):
+                in_test = False
+            elif in_test and re.search(r"\bacc(uracy)?\b", line, re.IGNORECASE):
+                lines.append(line)
+    return lines
+
+
+def check_metrics(cell_texts: list[str], grade: Grade) -> None:
     values: dict[str, float] = {}
-    for line in text.splitlines():
-        if not re.search(r"\btest\b", line, re.IGNORECASE):
-            continue
+    for line in test_lines(cell_texts):
         for name, number, percent in METRIC.findall(line):
             key = "exact" if name.lower().startswith("exact") else name.lower()
             value = float(number)
@@ -271,12 +290,35 @@ def parse_cell(source: str) -> list[ast.stmt]:
         return []
 
 
+def header_loads(node: ast.stmt) -> set[str]:
+    """Names a def or class reads when it is defined: defaults, decorators, bases."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        parts = node.args.defaults + [d for d in node.args.kw_defaults if d] + node.decorator_list
+    elif isinstance(node, ast.ClassDef):
+        parts = node.bases + [k.value for k in node.keywords] + node.decorator_list
+    else:
+        return set()
+    return set().union(*(loads(part) for part in parts))
+
+
+def is_constant(item: ast.stmt, known: set[str]) -> bool:
+    """UPPER_CASE or `device` from known names, or any name set from known names without a
+    call (warmup = 0.05, batch_size = 64 if not SMOKE else 8)."""
+    if not isinstance(item, (ast.Assign, ast.AnnAssign)) or item.value is None:
+        return False
+    names = defined_names(item)
+    if not names or not loads(item.value) <= known:
+        return False
+    no_call = not any(isinstance(n, ast.Call) for n in ast.walk(item.value))
+    return all(n.isupper() or n == "device" for n in names) or no_call
+
+
 def definitions(cells: list[str], known: set[str]) -> list[str]:
     """The code of the authored cells, without anything that holds data or training state.
 
-    Kept: imports (also those inside try blocks), functions, classes, and UPPER_CASE or
-    `device` constants whose value uses only names already defined this way. Dropped:
-    everything else (data tables, models, training loops, demo calls).
+    Kept: imports (also those inside try blocks), functions and classes whose defaults,
+    decorators and bases use only names kept so far, and constants (see is_constant).
+    Dropped: everything else (data tables, models, training loops, demo calls).
     """
     known = set(known) | set(dir(builtins))
     chunks = []
@@ -287,10 +329,8 @@ def definitions(cells: list[str], known: set[str]) -> list[str]:
             if isinstance(node, ast.Try):  # e.g. try: import torch / except: install it
                 candidates = [n for n in node.body if isinstance(n, (ast.Import, ast.ImportFrom))]
             for item in candidates:
-                constant = (isinstance(item, (ast.Assign, ast.AnnAssign)) and defined_names(item)
-                            and all(n.isupper() or n == "device" for n in defined_names(item))
-                            and loads(item.value) <= known)
-                if isinstance(item, DEFINES) or constant:
+                definable = isinstance(item, DEFINES) and header_loads(item) <= known
+                if definable or is_constant(item, known):
                     kept.append(ast.unparse(item))
                     known |= defined_names(item)
         chunks.append("\n".join(kept))
@@ -408,7 +448,7 @@ def grade_notebook(path: Path, outputs: Path, image: Path | None, spec: Spec = S
     check_ran(notebook, grade)
     check_counts(text, [output_text(c) for c in code_cells(notebook)], spec, grade)
     check_label_map(outputs / spec.label_map, grade)
-    check_metrics(text, grade)
+    check_metrics([output_text(c) for c in code_cells(notebook)], grade)
     check_sources(notebook, grade)
     check_outputs(outputs, spec, grade)
     check_inference(notebook, outputs, image, grade)
