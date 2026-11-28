@@ -39,7 +39,7 @@ agent, and the UI renders any tool's results and attachments.
 2. **Don't reimplement the loop.** If you need a different flow, add a hook to
    `BaseAgent` so every agent benefits.
 3. **Make capabilities composable.** Put reusable tools in a module (like
-   `builtin_tools.py`) and import them into any agent; don't inherit from
+   `core/builtin_tools.py`) and import them into any agent; don't inherit from
    another specialized agent just to get its tools.
 
 ## Tools in detail
@@ -75,7 +75,7 @@ def describe_column(column: str, top_n: int = 10, ctx: ToolContext = None) -> To
 
 The chat room's default agent is the **coordinator**. It answers simple
 questions itself and hands specialized work to other agents through one tool,
-`delegate(agent, task)` (see `delegation.py`):
+`delegate(agent, task)` (see `core/delegation.py`):
 
 * Any registered agent with `delegatable = True` appears in that tool's
   description, using its `name` and `description`. Write the `description`
@@ -97,7 +97,7 @@ Nothing in the coordinator changes when you add a specialist.
 
 Some specialists need a conversation, not a one-shot task: the chess coach
 teaches over many messages. Set `handoff_target = True` and the coordinator
-gets a `handoff(agent, note)` tool (see `handoff.py`):
+gets a `handoff(agent, note)` tool (see `core/handoff.py`):
 
 * The chat switches to the specialist, which answers the user's message in
   the same reply. Later messages go straight to it.
@@ -119,28 +119,16 @@ the workspace can be offered as a download: return
 the chat room lists it under the turn's answer. Specialists share the
 coordinator's workspace.
 
-## How the data science agent works
+## One folder per agent
 
-* `sandbox/kernel.py`: `KernelSandbox`, one IPython kernel in this project's
-  `.venv` (so every package in the `datascience` dependency group is
-  importable), started in the chat's workspace with secret environment
-  variables removed. It handles errors, timeouts (interrupt, variables
-  survive), crashes (restart) and Stop (interrupt).
-* `sandbox/notebook.py`: `NotebookSession` (kernel + `.ipynb` recorder) and
-  the `run_cell(code, note)` tool. Each cell is appended to the notebook with
-  its outputs, and the file is saved after every cell. Any agent can reuse
-  this: start a `NotebookSession` in `setup()`, keep it as `self.notebook`,
-  and add `run_cell` to its tools.
-* `agents/data_science.py`: the EDA instructions, and a `run()` wrapper that
-  frames each request in the notebook with "## Request" and "## Findings".
+A small agent is one module (`agents/general.py`). An agent with its own
+machinery gets a package, with the agent class in `agent.py` and the package's
+`__init__.py` importing it so the registry finds it:
 
-The model reads text only: charts are saved into the notebook for the user,
-and the prompt tells the agent to base conclusions on printed numbers.
+```
+agents/chess_coach/    agent.py · game.py · engine.py · bot.py
+agents/data_science/   agent.py · notebook.py · kernel.py · probe.py · kaggle.py · colab.py
+```
 
-### Ideas for later
-
-* EDA recipes as skills (`skills/data_science/...`): missing-data review,
-  outliers, correlations, time series.
-* Let a vision model see its charts (send `image/png` outputs back to it).
-* Run the kernel in its own container (no network, CPU and memory limits)
-  before analysing untrusted data. Only `KernelSandbox.start` changes.
+Its tests go in `tests/agents/`. See [the agent docs](agents/) for how the
+existing ones work.
