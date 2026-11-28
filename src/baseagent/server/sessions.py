@@ -1,7 +1,7 @@
 """In-memory chat sessions: one agent instance (and its memory) per chat.
 
 A chat starts with one agent (``session.agent``, usually the coordinator). That
-agent can hand the chat to a specialist (see ``baseagent.handoff``); from then
+agent can hand the chat to a specialist (see ``baseagent.core.handoff``); from then
 on ``session.current`` answers, until it hands the chat back. Every agent in
 the chat writes into one event log (``session.events``), with turn numbers
 that keep counting across agents, so the UI shows one continuous conversation.
@@ -19,13 +19,13 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel
 
-from baseagent import events as ev
-from baseagent.agent import AgentSettings, BaseAgent
+from baseagent.core import events as ev
+from baseagent.core.agent import AgentSettings, BaseAgent
 from baseagent.agents import get_agent_class
-from baseagent.delegation import INHERITED_SETTINGS
-from baseagent.handoff import COORDINATOR_NAME, handoff_targets
-from baseagent.llm import LLMClient
-from baseagent.workspace import Workspace
+from baseagent.core.delegation import INHERITED_SETTINGS
+from baseagent.core.handoff import COORDINATOR_NAME, handoff_targets
+from baseagent.core.llm import LLMClient
+from baseagent.core.workspace import Workspace
 
 ATTACHED = re.compile(r"\n\nAttached files?: [^\n]+$")  # added by app.with_attachments
 MAX_HANDOFFS_PER_MESSAGE = 2  # coordinator -> specialist -> back is the longest useful chain

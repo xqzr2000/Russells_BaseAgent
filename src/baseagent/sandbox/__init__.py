@@ -1,6 +1,11 @@
-"""Code execution for agents: a persistent Jupyter kernel and the notebook it records."""
+"""Locked-down containers for running code (Docker, via ``agent-sandbox-runtime``).
 
-from baseagent.sandbox.kernel import CellResult, KernelSandbox
-from baseagent.sandbox.notebook import NotebookRecorder, NotebookSession, run_cell
+* ``runner``: runs one snippet in a throwaway container with no network, a
+  read-only file system and tight limits
 
-__all__ = ["CellResult", "KernelSandbox", "NotebookRecorder", "NotebookSession", "run_cell"]
+Kept from the removed OpenCode code agent for the planned Claude Code sandbox.
+"""
+
+from baseagent.sandbox.runner import CodeRunner, RunLimits, RunnerUnavailable, RunResult
+
+__all__ = ["CodeRunner", "RunLimits", "RunResult", "RunnerUnavailable"]

@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug agent server (set breakpoints in agent.py)",
+      "name": "Debug agent server (set breakpoints in core/agent.py)",
       "type": "debugpy",
       "request": "launch",
       "module": "uvicorn",

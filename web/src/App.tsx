@@ -22,9 +22,7 @@ import type {
 } from "./types";
 
 const DEFAULTS_KEY = "baseagent.defaultSettings";
-const UPLOAD_ACCEPT =
-  ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet," +
-  ".py,.js,.mjs,.cjs,.ts,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.rb,.php,.sh,.sql,.r,.kt,.swift,.html,.css,.lua,.bas";
+const UPLOAD_ACCEPT = ".csv,.tsv,.txt,.json,.xlsx,.xls,.parquet";
 
 const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
@@ -572,7 +570,7 @@ export default function App() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onPaste={(e) => {
-                  // Fence pasted code so the code agent sees its original formatting.
+                  // Fence pasted code so it keeps its formatting in the message.
                   const fenced = fenceIfCode(e.clipboardData.getData("text/plain"));
                   if (!fenced) return;
                   e.preventDefault();

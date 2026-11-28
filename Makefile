@@ -1,4 +1,4 @@
-.PHONY: setup knowledge colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker test-opencode
+.PHONY: setup knowledge colab-setup colab-login colab-check dev start stop dev-log server web test typecheck check build serve clean sandbox-images test-docker eval-card
 
 setup:            ## install Python (uv) and UI (npm) dependencies
 	uv sync
@@ -42,19 +42,14 @@ web:              ## chat room only (port 5173)
 test:             ## Python tests (offline, no API calls)
 	uv run pytest -q
 
-.PHONY: eval-card
 eval-card:        ## grade the newest card-CNN Colab run (or NOTEBOOK=workspace/<chat>/outputs/baseagent-*/analysis.ipynb)
-	uv run python evals/card_cnn.py $(NOTEBOOK)
+	uv run python evals/card_cnn/grader.py $(NOTEBOOK)
 
-sandbox-images:   ## build the code agent's sandbox images (needs Docker)
+sandbox-images:   ## build the code runner's image (needs Docker)
 	docker build -t baseagent-runner:1 docker/runner
-	docker build -t baseagent-opencode:1 docker/opencode
 
-test-docker:      ## runner + full code-fix pipeline in real containers (after make sandbox-images)
-	uv run pytest -q -m docker tests/test_code_runner.py tests/test_code_fixer.py
-
-test-opencode:    ## the fixer's tools and permissions on a real OpenCode (set OPENCODE_BIN)
-	uv run pytest -q -m opencode tests/test_opencode_config.py
+test-docker:      ## the code runner in real containers (after make sandbox-images)
+	uv run pytest -q -m docker tests/sandbox
 
 typecheck:        ## TypeScript type check for the UI
 	cd web && npm run typecheck

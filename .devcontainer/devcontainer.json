@@ -4,7 +4,7 @@
   "build": { "dockerfile": "Dockerfile" },
   "features": {
     "ghcr.io/devcontainers/features/node:1": { "version": "22" },
-    // Docker for the code agent's sandboxes (OpenCode and the code runner).
+    // Docker for the code runner's sandboxes (and the planned Claude Code sandbox).
     "ghcr.io/devcontainers/features/docker-in-docker:4": {}
   },
   "containerEnv": {

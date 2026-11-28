@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from baseagent.agent import BaseAgent
+from baseagent.core.agent import BaseAgent
 from baseagent.agents import register_agent
-from baseagent.builtin_tools import calculator, current_time, list_notes, save_note
+from baseagent.core.builtin_tools import calculator, current_time, list_notes, save_note
 
 SKILLS = Path(__file__).resolve().parents[3] / "skills" / "general"
 

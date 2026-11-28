@@ -1,5 +1,5 @@
 // The chess coach's board, pinned at the top of the dialog panel.
-// The server owns the chess (src/baseagent/chess/game.py): this component draws the
+// The server owns the chess (src/baseagent/agents/chess_coach/game.py): this component draws the
 // board it sends and reports the user's drags. A drag is shown at once, then replaced
 // by the server's position (which adds castling rooks, promotions and the bot's reply).
 import { useEffect, useMemo, useState } from "react";

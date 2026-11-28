@@ -1,7 +1,5 @@
-// Recognise pasted code and wrap it in a ``` block with its language, so the code agent
-// reads it straight from the message (the coordinator never has to copy it). The same
-// markers as src/baseagent/codeagent/language.py, which handles code that still arrives
-// unlabelled.
+// Recognise pasted code and wrap it in a ``` block with its language, so it keeps its
+// formatting and is shown as code in the chat.
 
 type Marker = [RegExp, number];
 
