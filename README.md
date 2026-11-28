@@ -1,6 +1,6 @@
 # Russell's BaseAgent
 
-A small [ReAct](https://arxiv.org/pdf/2210.03629) agent framework in Python, designed to be subclassed into specialized agents. 
+A small [ReAct](https://arxiv.org/pdf/2210.03629) agent framework in Python, designed to be subclassed into specialized agents, with a web chat room to try them in.
 
 ```python
 class YourAgent(BaseAgent):
@@ -9,31 +9,13 @@ class YourAgent(BaseAgent):
 
 It grew out of the [CMU 11-768 AI Agents assignment](https://www.cmu-agents.com/#/assignments) and borrows ideas from [smolagents](https://github.com/huggingface/smolagents) (typed tools, small core), [OpenManus](https://github.com/FoundationAgents/OpenManus) (agent state, cleanup), and [Microsoft Agent Framework](https://github.com/microsoft/agent-framework) (composition, events for a dev UI).
 
+**Where it's going:** Jack, the coordinator, will represent me to recruiters at a public URL by summer 2027. The data scientist behind him is being built task by task on real data-science work: a Kaggle competition, then the DABStep and Spider 2.0 benchmarks. See the [roadmap](docs/roadmap.md) and the [showcase](showcase/).
 
 ## What does `BaseAgent` do?
 
-`BaseAgent` is the shared runtime for your specialized agents.
+`BaseAgent` is the shared runtime, so a specialized agent only describes what makes it different: its instructions, its tools and its domain behaviour. The base class handles the conversation loop, LLM calls, tool calling and validation, memory and long-context compaction, event streaming, step limits, usage tracking and logging.
 
-Instead of re-implementing the agent loop each time, you can focus on the parts that make your agent unique:
-- its instructions
-- its tools
-- its domain-specific behavior
-
-`BaseAgent` handles the common runtime tasks for you, including:
-- the conversation loop
-- LLM calls
-- tool calling and execution
-- memory management
-- long-context compaction
-- event streaming
-- step limits
-- usage tracking
-- logging
-
-### Example: `class DataScienceAgent(BaseAgent):`
-
-A subclass only describes what makes it different. This is the shape of the real one in
-[`agents/data_science.py`](src/baseagent/agents/data_science.py):
+This is the shape of the real data scientist in [`agents/data_science/agent.py`](src/baseagent/agents/data_science/agent.py):
 
 ```python
 @register_agent
@@ -48,183 +30,51 @@ class DataScienceAgent(BaseAgent):
         await self.notebook.start()
 
     def system_prompt(self) -> str:
-        return SYSTEM_PROMPT  # the basic EDA checklist
+        return SYSTEM_PROMPT
 
     def get_tools(self):
-        return [run_cell]  # runs Python as a notebook cell, saves the .ipynb
+        return [run_cell, inspect_dataset, ...]  # notebook cells, dataset probe, Colab runs
 ```
 
 ## Agents in the chat room
 
-| Agent | What it does |
-|---|---|
-| **Coordinator** (default) | Jack the coordinator, answers simple things and delegates specialized work to any agent marked `delegatable`. |
-| **Data scientist** | Do basic EDA in a Jupyter kernel. Returns a summary and a downloadable `.ipynb`. |
-| **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop. |
-| **Chess coach** | Say *teach me chess* to open a guided board with Stockfish hints and an explanation beside it. |
-| **Code agent** | Paste code (in a ``` block) or attach a file and ask *fix this*: OpenCode fixes and explains it in a sandbox with a free model. |
+| Agent | What it does | Docs |
+|---|---|---|
+| **Jack (the coordinator)** | The default chat. Answers simple things and routes the rest: delegates tasks to specialists, hands the chat to the chess coach | [coordinator](docs/agents/coordinator.md) |
+| **Data scientist** | EDA in a Jupyter kernel, or a model trained on a Colab T4 after a CPU smoke run; returns a summary and a downloadable `.ipynb` | [data scientist](docs/agents/data-scientist.md) |
+| **Chess coach** | Say *teach me chess* for a guided board with Stockfish hints, or *let's play chess* to play as White | [chess coach](docs/agents/chess-coach.md) |
+| **General assistant** | The base agent with a calculator, a clock and notes, for testing the loop | |
 
-> Jack the Coordinator is a Jack Russell Terrier. I'm building him to be interactive, with an LLM handling the intelligence and `Three.js` bringing him to life.
-> Wish me luck!
-
-### Chess teaching demo
-
-Say *teach me chess* for a piece drill or *let’s play chess* to play as White.
-Select **Hint** for a move and its arrow without waiting for a chat reply.
-**Play next move** plays one engine move for the side to move so you can follow both sides.
-The coach’s latest explanation, move narration, and next step stay next to the board.
-
-Stockfish is installed in new Codespaces. Rebuild an existing container to pick it up.
-For local runs, install Stockfish and put it on your PATH or set `STOCKFISH_PATH` to the executable.
-The built-in practice engine covers lessons without kings and installations without Stockfish.
-
-### EDA on a CSV
-
-1. Drag a CSV into the chat (or click the paperclip).
-2. Ask: *do EDA on it*.
-3. The coordinator delegates to the data scientist. Its progress appears under the
-   `delegate` step; when it's done you get a summary and a **Download** card for the notebook.
-
-The kernel runs inside the Codespace, in `workspace/<chat id>/` next to the uploaded
-`data/` folder, so the notebook re-runs from the top there. Nothing in `workspace/` or
-`runs/` is committed. Without an API key, the offline `fake-echo` model walks the same
-path with one canned EDA cell, which is handy for checking the plumbing.
-
-**Opening the notebook in Google Colab.** The downloaded notebook is written to run from
-the top on another machine:
-
-- After the imports there is a **Data files** cell listing the `data/` files the notebook
-  reads. In Colab it asks you to upload the missing ones; anywhere else it tells you to
-  put them in `data/` beside the notebook. Data files are never stored in the notebook.
-- Cells that raised an error are left out. The data scientist reruns a corrected cell,
-  and only cells that ran are kept, so **Runtime → Run all** doesn't stop halfway.
-
-In Colab: **File → Upload notebook** (or open it from GitHub once it's in a repo), then
-**Run all**.
-
-### Knowledge skills (private)
-
-The data scientist loads concept skills from `knowledge/`, a git submodule of the
-private [jack-knows-it-all](https://github.com/xqzr2000/jack-knows-it-all) repo
-(e.g. `data-splitting`, `composite-labels`, `image-classification-baseline`). Its
-prompt lists each skill under its area with the scenarios it explains; the agent
-loads a skill with `invoke_skill` before work it covers, and its answer names the
-skills it used.
-
-- New codespaces check out `knowledge/` by themselves; GitHub asks you to authorize
-  read access to the private repo when the codespace is created (an existing
-  codespace needs to be recreated once to get it).
-- `make knowledge` pulls newly merged skills; new chats use them. Commit the moved
-  `knowledge` pointer when convenient.
-- Without access (public users), `knowledge/` stays empty and BaseAgent works
-  without these skills.
-
-### Run a notebook on Colab T4
-
-Use the official [Google Colab CLI](https://github.com/googlecolab/google-colab-cli)
-to run an analysis or training notebook from the chat on a remote T4.
-
-1. The dev container installs the Colab CLI and the
-   [Google Cloud CLI](https://cloud.google.com/sdk/docs/install). Outside it, run
-   `make colab-setup` and install the Google Cloud CLI yourself.
-2. Sign in once with the Google account you use with Colab: run `make colab-login`,
-   open the link it prints, and paste the code back. It then checks access with
-   `colab --auth adc usage` (or run `make colab-check` any time).
-   The sign-in is stored in `/workspaces/.gcloud` (`CLOUDSDK_CONFIG`), outside the
-   repo, so it survives container rebuilds in Codespaces and is never committed.
-   Deleting the codespace removes it; a local dev container needs a new sign-in after a rebuild.
-
-3. In a chat with Jack or the data scientist, open **Settings → Notebook compute**,
-   select **Colab T4**, and save. Use a real chat model to plan the notebook.
-4. For a competition pilot, upload the data files you are allowed to use with Colab
-   (for example, train, test, and sample submission CSVs). Give the agent the
-   challenge objective, metric and submission requirements. Ask it to validate a
-   baseline and write `submission.csv`. Its notebook and generated files appear
-   as downloads in the chat.
-
-For a public Kaggle dataset, paste its dataset URL directly. How the data scientist
-gets from the request to a Colab run:
-
-1. **Look at the data.** `inspect_dataset` downloads the dataset in the Codespace
-   (cached after the first time) and reports its layout, each table's columns, whether
-   path columns point to real files, image sizes and any model files shipped with it.
-   It works the same for any dataset, or for the chat's uploaded `data/` files.
-2. **Write the draft**, one cell at a time. Cells written by BaseAgent come first and
-   define `SMOKE`, `OUTPUT_DIR` (where every returned file is written; `/content` on
-   Colab) and, for Kaggle, `dataset_root`.
-3. **Smoke run.** `smoke_test_notebook` runs every cell from the top on the
-   Codespace's CPU with `SMOKE = True`, when the notebook uses a tiny subset and one
-   short epoch, and checks that each declared output was written. A failure names the
-   cell and shows the output of the cells before it, in seconds, not after a Colab run.
-4. **Colab run.** `run_colab_notebook` only runs a draft that passed a smoke run after
-   its last change, with the same inputs and outputs.
-
-If execution fails, the chat can still return the saved `colab_draft.ipynb` with its
-source cells. The smoke run uses the CPU builds of `torch` and `torchvision` that
-`uv sync` installs.
-
-Each run starts a fresh Colab session, checks the assigned GPU, and transfers the
-uploaded files declared by the notebook. The app uses Google credentials locally
-for the CLI. Successful downloads contain the executed notebook and requested
-outputs. The app attempts to release the runtime on completion, failure, or Stop.
-A run has a 15-minute limit. T4 access depends on Colab capacity and your account's
-quota. New chats start with **Local CPU**.
-
-### Fix and explain code
-
-1. Paste code in a ``` block (or attach a `.py`, `.js`, `.ts`, ... file) and ask, e.g.
-   *why doesn't this stop?*
-2. Jack calls `fix_code`. OpenCode starts in a fresh, locked-down container (read-only,
-   non-root, no API keys) with a **free** OpenCode model, and its progress appears under the step.
-3. You get *What was wrong*, the fixed code with `# FIX n:` comments, and one line saying how
-   far it was verified: **Ran** (output shown), **Checked only** (syntax/type check, with the
-   reason it wasn't run) or **Reviewed only**.
-
-How much is run depends on your wording: *just look at it* / *don't run it* = review only;
-*does it work?* / *run it* = check and run (a marked `# TEST:` call is added to function-only
-code); anything else = always checked, run when it matters. Code runs in a second throwaway
-container: no network, 10 s, 512 MB. Concept questions (*what does `enumerate` do?*) Jack
-answers himself, with no containers.
-
-Needs Docker (in the devcontainer) and `make sandbox-images`. Only zero-retention free models
-are used; set `OPENCODE_ALLOW_TRAINING_MODELS=1` to also allow free models that may log or
-train on what they're sent. Try it without the chat: `uv run python -m baseagent.codeagent file.py`.
-
-## GitHub Codespaces Quick Start
-
-### 1. Fork or clone this repository, then create a Codespace
-- If you like the project, give it a star.
-- The dev container installs `Python 3.12`, `Node.js 22`, and `uv`, then runs `uv sync` and `npm ci`.
-- `uv sync` also installs the data science stack the agent's kernel uses (pandas, numpy, scipy,
-  matplotlib, seaborn, scikit-learn, statsmodels, pyarrow, openpyxl). In an existing Codespace,
-  run `uv sync` once after pulling.
-
-### 2. Add `OPENAI_API_KEY` as a Codespaces secret
-- In GitHub, go to **Settings → Codespaces → New secret**
-- Name it `OPENAI_API_KEY`
-- Grant access to this repository
-- Optional: set `OPENAI_MODEL` to override the default model
-- Without an API key, the chat room still works using the offline `fake-echo` model
-
-### 3. Open the chat room
-- The Codespace starts the chat room by itself, every time it starts or resumes.
-  Open the Chat room port (5173) from the Ports tab.
-- `make dev-log` follows its log; `make stop` stops it; `make start` starts it again.
-- `make dev` runs it in your terminal instead (it stops the background copy first).
-  Set `BASEAGENT_AUTOSTART=0` as a Codespaces variable to turn auto-start off.
-- Chats live in the agent server's memory, so they don't survive a restart. A tab left
-  open from before tells you so and starts a new chat with your next message.
-
-### See it in action.
-
-- Fixing Python code
-- Teaching Chess, get interrupted
-- Data Science Capabilities and more
+> Jack the coordinator is named after a Jack Russell Terrier.
 
 https://github.com/user-attachments/assets/57b80f7d-bdc9-4745-9fb1-bfad1a152d7d
 
+## Quick start
+
+1. Create a GitHub Codespace on this repo (the dev container installs everything).
+2. Add `OPENAI_API_KEY` as a Codespaces secret. Without it, the chat room runs on an offline model.
+3. Open the **Chat room** port (5173). Drag a CSV in and ask *do EDA on it*, or say *teach me chess*.
+
+Details: [Codespaces setup](docs/setup/codespaces.md) · [Colab T4 setup](docs/setup/colab.md) · `make test` runs the offline tests.
 
 ## Repo tree
 
-Still evolving...
+```
+src/baseagent/
+  core/            the framework: agent loop, LLM clients, tools, events, memory, skills, delegation, handoff
+  agents/          coordinator.py · general.py · chess_coach/ · data_science/ · _template.py
+  server/          FastAPI: sessions, SSE stream, uploads, chess endpoints
+  sandbox/         locked-down Docker code runner (for the planned Claude Code sandbox)
+web/               the chat room (React + Vite)
+tests/             offline tests, mirroring src/
+evals/             graders for real agent runs, one folder per case
+showcase/          each task the agent was built around: task, harness, results, build log
+docs/              architecture, adding an agent, per-agent docs, setup, roadmap
+skills/            public SKILL.md playbooks
+knowledge/         private skills submodule (empty without access)
+packages/          agent-sandbox-runtime (Docker sandboxes)
+docker/runner/     the code runner's image
+scripts/           dev and background-start scripts
+```
 
+Start with [the architecture](docs/architecture.md), or build your own agent with [adding an agent](docs/adding-an-agent.md).
