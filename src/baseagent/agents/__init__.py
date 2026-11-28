@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
-from baseagent.agent import BaseAgent
+from baseagent.core.agent import BaseAgent
 
 AGENTS: dict[str, type[BaseAgent]] = {}
 

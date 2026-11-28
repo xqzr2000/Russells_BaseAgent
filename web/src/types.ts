@@ -16,7 +16,7 @@ export interface Attachment {
   url: string | null;
 }
 
-/** The chess coach's board (ChessSession.view() in src/baseagent/chess/game.py). */
+/** The chess coach's board (ChessSession.view() in src/baseagent/agents/chess_coach/game.py). */
 export interface BoardState {
   fen: string;
   mode: "lesson" | "game";

@@ -1,4 +1,4 @@
-# The code agent's runner: runs one snippet of the user's code, then is deleted.
+# The code runner (baseagent.sandbox.runner): runs one snippet of code, then is deleted.
 #
 # BaseAgent starts it with no network, a read-only file system, 512 MB of memory
 # (no swap), 1 CPU, a small process limit and a non-root user; the code goes in

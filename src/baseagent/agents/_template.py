@@ -11,7 +11,7 @@ server (``make dev`` auto-reloads). It appears in the chat room's agent picker.
 from __future__ import annotations
 
 from baseagent import BaseAgent, ToolContext, ToolError, ToolResult, register_agent, tool
-from baseagent.events import Attachment
+from baseagent.core.events import Attachment
 
 
 @tool
